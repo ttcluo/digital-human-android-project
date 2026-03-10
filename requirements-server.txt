@@ -1,0 +1,50 @@
+# Ultralight Digital Human - Server Python Dependencies (CUDA 12.1)
+# Python 3.10+
+# 为服务器环境优化，包含 CUDA 12.1 支持
+
+# Core PyTorch with CUDA 12.1
+# 使用 PyTorch 官方 CUDA 12.1 版本
+torch>=2.5.1
+torchvision>=0.20.1
+torchaudio>=2.5.1
+
+# Numerical & Scientific
+numpy>=2.2.6
+scipy>=1.9.0
+scikit-learn>=1.2.0
+
+# Computer Vision
+opencv-python>=4.7.0
+Pillow>=12.0.0
+
+# Audio Processing
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Deep Learning
+transformers>=4.30.0
+onnx>=1.14.0
+onnxruntime>=1.15.0
+
+# Training
+tensorboard>=2.13.0
+tqdm>=4.65.0
+
+# Configuration
+PyYAML>=6.0
+pyyaml-cfg>=0.3
+
+# Logging
+wandb>=0.15.0
+
+# 服务器特定依赖
+# 这些包在服务器上可能有用，但在移动端不需要
+matplotlib>=3.7.0  # 数据可视化
+jupyter>=1.0.0    # 交互式开发
+seaborn>=0.12.0   # 统计可视化
+
+# 安装说明：
+# 1. 对于 CUDA 12.1 环境，使用以下命令安装 PyTorch：
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 2. 然后安装其他依赖：
+#    pip install -r requirements-server.txt
