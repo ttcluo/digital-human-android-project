@@ -1,0 +1,82 @@
+# 训练配置文件
+# Ultralight Digital Human 训练配置
+
+# 模型配置
+model:
+  name: "light_unet_v1"
+  base_channels: 32
+  depth: 4
+  audio_feature_dim: 256
+  use_syncnet: true
+
+# 训练配置
+training:
+  batch_size: 8
+  num_epochs: 200
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  lr_scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 5
+    min_lr: 0.00001
+  gradient_clip: 1.0
+  
+  # GPU配置
+  gpu_ids: [0, 1]  # 多GPU训练
+  distributed: false
+  
+  # 混合精度训练
+  use_amp: true
+
+# 数据配置
+data:
+  dataset_path: "./data/processed"
+  audio_sample_rate: 16000
+  image_size: 256
+  video_fps: 25
+  train_split: 0.9
+  num_workers: 4
+  
+  # 数据增强
+  augmentation:
+    horizontal_flip: true
+    rotation: 15
+    brightness: 0.2
+    contrast: 0.2
+    noise: 0.01
+
+# 损失函数配置
+loss:
+  reconstruction_weight: 1.0
+  perceptual_weight: 0.1
+  sync_weight: 0.5
+  edge_weight: 0.05
+  
+# 优化器配置
+optimizer:
+  type: "Adam"
+  lr: 0.001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+# 检查点配置
+checkpoint:
+  save_dir: "./checkpoints/trained_models"
+  save_interval: 10
+  keep_last_n: 5
+  resume_from: null  # 从哪个检查点恢复
+
+# 日志配置
+logging:
+  log_dir: "./logs"
+  tensorboard: true
+  wandb: false
+  log_interval: 10
+  validate_interval: 1
+
+# 验证配置
+validation:
+  batch_size: 4
+  save_images: true
+  save_dir: "./outputs/validation"

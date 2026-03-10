@@ -1,0 +1,51 @@
+# 推理配置文件
+# Ultralight Digital Human 推理配置
+
+# 模型配置
+model:
+  checkpoint_path: "./checkpoints/trained_models/best_model.pth"
+  input_size: 256
+  audio_feature_dim: 256
+
+# 推理配置
+inference:
+  device: "cuda"  # cuda 或 cpu
+  batch_size: 1
+  use_fp16: false
+  
+  # 流式推理
+  streaming:
+    enabled: true
+    buffer_size: 25
+    overlap: 5
+
+# 输入配置
+input:
+  reference_images_dir: "./data/reference"
+  audio_path: "./data/input/audio.wav"
+  start_time: 0.0
+  end_time: null  # null表示整个音频
+
+# 输出配置
+output:
+  output_dir: "./outputs"
+  video_name: "output"
+  fps: 25
+  video_codec: "mp4v"
+  audio_codec: "aac"
+  save_frames: false
+  frames_dir: "./outputs/frames"
+
+# 后处理配置
+postprocessing:
+  denormalize: true
+  color_correction: false
+  sharpen: false
+  sharpen_kernel: 3
+  sharpen_amount: 0.5
+
+# 性能配置
+performance:
+  num_threads: 4
+  prefetch_frames: 10
+  async_inference: false

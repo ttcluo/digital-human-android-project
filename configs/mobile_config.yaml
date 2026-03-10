@@ -1,0 +1,103 @@
+# 移动端配置文件
+# Ultralight Digital Human 移动端部署配置
+
+# 模型配置
+model:
+  # 模型类型
+  type: "light_unet"
+  base_channels: 32
+  depth: 4
+  audio_feature_dim: 256
+  
+  # 输入大小
+  input_size: 256
+
+# 导出配置
+export:
+  # 输出目录
+  output_dir: "./android/app/src/main/assets"
+  
+  # 导出格式
+  format: "onnx"  # onnx, tflite, torchscript
+  
+  # ONNX配置
+  onnx:
+    opset_version: 11
+    dynamic_axes:
+      image:
+        batch: 0
+      audio_features:
+        batch: 0
+        timestep: 1
+      output:
+        batch: 0
+  
+  # 量化配置
+  quantization:
+    enabled: true
+    type: "dynamic"  # dynamic, static
+    dtype: "int8"
+
+# 移动端运行时配置
+runtime:
+  # 设备类型
+  device: "cpu"  # cpu, gpu, npu
+  
+  # 线程配置
+  num_threads: 4
+  
+  # 内存配置
+  memory:
+    max_buffer_size: 100  # MB
+    enable_memory_pool: true
+
+# 推理配置
+inference:
+  # 批处理
+  batch_size: 1
+  
+  # 输入预处理
+  preprocessing:
+    normalize: true
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  
+  # 输出后处理
+  postprocessing:
+    denormalize: true
+    clip_range: [0, 255]
+
+# 性能目标
+performance:
+  # 目标帧率
+  target_fps: 25
+  
+  # 延迟要求 (ms)
+  latency:
+    max: 40  # 最大延迟
+    target: 30  # 目标延迟
+  
+  # 内存限制 (MB)
+  memory_limit: 200
+
+# Android特定配置
+android:
+  # NNAPI加速
+  use_nnapi: true
+  
+  # GPU委托
+  use_gpu_delegate: false
+  
+  # XNNPACK
+  use_xnnpack: true
+
+# iOS特定配置
+ios:
+  # CoreML
+  use_coreml: true
+  
+  # Metal
+  use_metal: true
+  
+  # 引擎
+  engine: "ort"  # ort, ncnn
