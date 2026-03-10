@@ -51,6 +51,9 @@ pip install -r requirements.txt
 ```bash
 # 运行服务器配置脚本（需要root权限）
 sudo bash scripts/setup-server.sh
+
+# 安装完成后验证环境
+bash scripts/verify.sh
 ```
 
 ### 4. 数据预处理
@@ -112,6 +115,48 @@ digital-human-android-project/
 - **Android**: API 24+
 - **ONNX Runtime**: 1.16.3
 - **CUDA**: 11.7
+
+## 环境验证
+
+### 快速验证
+```bash
+# 运行验证脚本
+bash scripts/verify.sh
+
+# 或运行详细验证
+python3 scripts/verify-installation.py
+```
+
+### 代码同步流程
+
+1. **本地开发**
+   ```bash
+   # 修改代码后提交
+   git add .
+   git commit -m "描述更改"
+   git push origin main
+   ```
+
+2. **服务器拉取更新**
+   ```bash
+   # SSH到服务器
+   ssh root@server_ip
+   
+   # 进入项目目录
+   cd /data/luochuan/digital-human-android-project
+   
+   # 拉取最新代码
+   git pull origin main
+   
+   # 验证更新
+   bash scripts/verify.sh
+   ```
+
+### 自动化同步
+```bash
+# 使用同步脚本
+bash scripts/sync-code.sh main server_ip push
+```
 
 ## 文档
 

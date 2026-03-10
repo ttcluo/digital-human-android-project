@@ -217,8 +217,8 @@ if __name__ == "__main__":
     test_frame = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
     
     # 测试功能
-    resized = processor.resize_frame(test_frame, (128    print(f"调整大小, 128))
-后形状: {resized.shape}")
+    resized = processor.resize_frame(test_frame, (128, 128))
+    print(f"调整大小后形状: {resized.shape}")
     
     normalized = processor.normalize_frame(test_frame)
     print(f"归一化后范围: [{normalized.min():.2f}, {normalized.max():.2f}]")
