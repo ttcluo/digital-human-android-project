@@ -10,6 +10,64 @@ from pathlib import Path
 import subprocess
 
 
+def resize_video(
+    video_path: str,
+    output_path: str,
+    target_size: Tuple[int, int],
+    fps: Optional[int] = None,
+):
+    """调整视频大小
+    
+    Args:
+        video_path: 输入视频路径
+        output_path: 输出视频路径
+        target_size: 目标尺寸 (width, height)
+        fps: 输出视频帧率，如果为None则使用原视频帧率
+    """
+    # 读取视频
+    cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        raise ValueError(f"无法打开视频: {video_path}")
+    
+    # 获取视频信息
+    original_fps = int(cap.get(cv2.CAP_PROP_FPS))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    if fps is None:
+        fps = original_fps
+    
+    # 创建视频写入器
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, target_size)
+    
+    if not out.isOpened():
+        raise ValueError(f"无法创建输出视频: {output_path}")
+    
+    # 处理每一帧
+    frame_count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # 调整帧大小
+        resized_frame = cv2.resize(frame, target_size)
+        
+        # 写入输出视频
+        out.write(resized_frame)
+        
+        frame_count += 1
+        if frame_count % 100 == 0:
+            print(f"处理进度: {frame_count}/{total_frames} 帧")
+    
+    # 释放资源
+    cap.release()
+    out.release()
+    
+    print(f"视频调整完成: {output_path} ({frame_count} 帧)")
+
+
 class VideoProcessor:
     """视频处理工具类"""
     
