@@ -183,10 +183,15 @@ class OnDeviceUNet(nn.Module):
         self.down3 = Down(ch[2], ch[3])
         self.down4 = Down(ch[3], ch[4])
 
-        self.up1 = Up(ch[4], ch[3] // 2)
-        self.up2 = Up(ch[3], ch[2] // 2)
-        self.up3 = Up(ch[2], ch[1] // 2)
-        self.up4 = Up(ch[1], ch[0])
+        # 注意：上采样阶段的 in_channels 需要精确等于 concat 之后的通道数
+        # up1: concat(x5: ch3, x4: ch3) -> 2*ch3
+        self.up1 = Up(ch[3] * 2, ch[3] // 2)
+        # up2: concat(up1_out: ch3//2, x3: ch2) -> ch3//2 + ch2
+        self.up2 = Up(ch[3] // 2 + ch[2], ch[2] // 2)
+        # up3: concat(up2_out: ch2//2, x2: ch1) -> ch2//2 + ch1
+        self.up3 = Up(ch[2] // 2 + ch[1], ch[1] // 2)
+        # up4: concat(up3_out: ch1//2, x1: ch0) -> ch1//2 + ch0
+        self.up4 = Up(ch[1] // 2 + ch[0], ch[0])
 
         self.outc = OutConv(ch[0], 3)
 
