@@ -112,7 +112,8 @@ class AudioConvWenetLite(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
-        ch = [16, 32, 64, 96, 128]
+        # 更激进的通道压缩：整体再砍一半
+        ch = [8, 16, 32, 48, 64]
 
         # 128 -> 96
         self.conv1 = InvertedResidual(
@@ -168,8 +169,8 @@ class OnDeviceUNet(nn.Module):
         super().__init__()
         self.n_channels = n_channels
 
-        # 更小的通道配置
-        ch = [16, 32, 64, 96, 128]
+        # 与 AudioConvWenetLite 保持一致的轻量通道配置
+        ch = [8, 16, 32, 48, 64]
 
         self.audio_model = AudioConvWenetLite()
         self.fuse_conv = nn.Sequential(
