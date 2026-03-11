@@ -24,6 +24,8 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.concurrent.ArrayBlockingQueue
 
@@ -44,6 +46,9 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     private var audioRecord: AudioRecord? = null
     private val audioQueue: ArrayBlockingQueue<ShortArray> =
         ArrayBlockingQueue(AUDIO_QUEUE_CAPACITY)
+    private var wenetFeatFrames: FloatArray? = null
+    private var wenetFrameCount: Int = 0
+    private var wenetFeatSize: Int = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -202,6 +207,15 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         // 启动音频采集线程（骨架：采集后丢进队列，暂不参与推理）
         startAudioCapture()
 
+        // 预加载伪流式 WeNet 特征（如果存在的话）
+        if (wenetFeatFrames == null) {
+            try {
+                loadWenetFeatStream(this, "wenet_feat_stream.bin")
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "loadWenetFeatStream failed, fallback to zero audio", e)
+            }
+        }
+
         realtimeRunning = true
         realtimeThread = Thread {
             val outH = 128
@@ -225,6 +239,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
                 val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
                 val imgInput = FloatArray(imgSize) { 0.0f }
+                // 单帧音频特征缓冲区，形状 [1,128,16,32]
                 val audioInput = FloatArray(audioSize) { 0.0f }
 
                 // 尝试从 assets 加载一张 128x128 参考人脸图片，填入 6 通道图像输入（前 3 通道 + 后 3 通道复用同一张图）。
@@ -244,7 +259,22 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
                 pixels = IntArray(outW * outH)
 
+                var audioFrameIndex = 0
+
                 while (realtimeRunning) {
+                    // 每帧从预生成的 WeNet 特征序列中取出一帧填充 audioInput；如果没有则保持全 0。
+                    val featFrames = wenetFeatFrames
+                    if (featFrames != null && wenetFrameCount > 0 && wenetFeatSize > 0) {
+                        val frame = audioFrameIndex % wenetFrameCount
+                        val base = frame * wenetFeatSize
+                        var i = 0
+                        while (i < wenetFeatSize && i < audioInput.size) {
+                            audioInput[i] = featFrames[base + i]
+                            i++
+                        }
+                        audioFrameIndex++
+                    }
+
                     val result = session.run(
                         mapOf(
                             inputNames[0] to imgTensor,
@@ -320,6 +350,53 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 realtimeRunning = false
             }
         })
+    }
+
+    /**
+     * 从 assets 中加载通过 export_wenet_feat_for_android.py 生成的伪流式 WeNet 特征：
+     * 文件格式：
+     * - 前 4 个 int32: [T, C, H, W]，其中 C=128, H=16, W=32
+     * - 后面为 T*C*H*W 个 float32，按 C-H-W 展开。
+     */
+    private fun loadWenetFeatStream(context: Context, assetName: String) {
+        context.assets.open(assetName).use { input ->
+            val headerBytes = ByteArray(4 * 4)
+            var read = input.read(headerBytes)
+            if (read != headerBytes.size) {
+                throw IllegalStateException("读取 WeNet 特征头部失败，read=$read")
+            }
+            val headerBuf = ByteBuffer.wrap(headerBytes).order(ByteOrder.LITTLE_ENDIAN)
+            val T = headerBuf.int
+            val C = headerBuf.int
+            val H = headerBuf.int
+            val W = headerBuf.int
+            if (C != 128 || H != 16 || W != 32) {
+                throw IllegalStateException("WeNet 特征维度不匹配: C=$C,H=$H,W=$W, 期望 128,16,32")
+            }
+            val featSize = C * H * W
+            val total = T * featSize
+            val dataBytes = ByteArray(total * 4)
+            var offset = 0
+            while (offset < dataBytes.size) {
+                val r = input.read(dataBytes, offset, dataBytes.size - offset)
+                if (r <= 0) break
+                offset += r
+            }
+            if (offset != dataBytes.size) {
+                throw IllegalStateException("读取 WeNet 特征体失败: 期望 ${dataBytes.size} 字节, 实际 $offset")
+            }
+            val floatBuf =
+                ByteBuffer.wrap(dataBytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+            val arr = FloatArray(total)
+            floatBuf.get(arr)
+            wenetFeatFrames = arr
+            wenetFrameCount = T
+            wenetFeatSize = featSize
+            Log.i(
+                LOG_TAG,
+                "Loaded WeNet feat stream: T=$T, C=$C, H=$H, W=$W, total=${arr.size}"
+            )
+        }
     }
 
     /**
