@@ -32,6 +32,13 @@ def main() -> None:
         help="U-Net 训练好的权重文件路径",
     )
     parser.add_argument(
+        "--unet",
+        type=str,
+        default="ultralight",
+        choices=["ultralight", "ondevice"],
+        help="选择 U-Net 结构：原始 ultralight 或端侧轻量 ondevice",
+    )
+    parser.add_argument(
         "--out",
         default=os.path.join(ROOT, "data/result_preview_with_audio.mp4"),
         help="最终带音频输出视频路径（.mp4）",
@@ -65,7 +72,8 @@ def main() -> None:
         f'--asr wenet --dataset "{dataset_dir}" '
         f'--audio_feat "{audio_npy}" '
         f'--save_path "{tmp_noaudio}" '
-        f'--checkpoint "{checkpoint}"',
+        f'--checkpoint "{checkpoint}" '
+        f'--unet {args.unet}',
         cwd=ULTRA,
     )
 

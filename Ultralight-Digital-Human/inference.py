@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import cv2
 import torch
 import numpy as np
@@ -12,14 +13,23 @@ from unet import Model
 # from unet_att import Model
 
 import time
-parser = argparse.ArgumentParser(description='Train',
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser = argparse.ArgumentParser(
+    description='Inference',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+)
 
 parser.add_argument('--asr', type=str, default="hubert")
 parser.add_argument('--dataset', type=str, default="")  
 parser.add_argument('--audio_feat', type=str, default="")
 parser.add_argument('--save_path', type=str, default="")     # end with .mp4 please
 parser.add_argument('--checkpoint', type=str, default="")
+parser.add_argument(
+    '--unet',
+    type=str,
+    default='ultralight',
+    choices=['ultralight', 'ondevice'],
+    help="选择 U-Net 结构：原始 ultralight 或端侧轻量 ondevice",
+)
 args = parser.parse_args()
 
 checkpoint = args.checkpoint
@@ -62,8 +72,20 @@ if mode=="wenet":
 step_stride = 0
 img_idx = 0
 
-net = Model(6, mode).to(device)
-net.load_state_dict(torch.load(checkpoint, map_location=device))
+if args.unet == "ondevice":
+    if mode != "wenet":
+        raise ValueError("OnDeviceUNet 目前只支持 asr=wenet，请使用 --asr wenet")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.append(repo_root)
+    from src.models.unet_ondevice_light import OnDeviceUNet  # type: ignore
+
+    net = OnDeviceUNet(6).to(device)
+    state = torch.load(checkpoint, map_location=device)
+    net.load_state_dict(state)
+else:
+    net = Model(6, mode).to(device)
+    net.load_state_dict(torch.load(checkpoint, map_location=device))
 net.eval()
 for i in range(audio_feats.shape[0]):
     if img_idx>len_img - 1:
