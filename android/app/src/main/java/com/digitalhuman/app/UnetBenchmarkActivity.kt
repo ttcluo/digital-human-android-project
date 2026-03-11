@@ -3,6 +3,10 @@ package com.digitalhuman.app
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Rect
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -200,10 +204,14 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
         realtimeRunning = true
         realtimeThread = Thread {
+            val outH = 128
+            val outW = 128
             var env: OrtEnvironment? = null
             var session: OrtSession? = null
             var imgTensor: OnnxTensor? = null
             var audioTensor: OnnxTensor? = null
+            var bitmap: Bitmap? = null
+            var pixels: IntArray? = null
             try {
                 env = OrtEnvironment.getEnvironment()
                 val modelFile = copyAssetToCache(this, "unet_ondevice_128.onnx")
@@ -212,33 +220,79 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                     OrtSession.SessionOptions()
                 )
 
-                val imgShape = longArrayOf(1, 6, 128, 128)
+                val imgShape = longArrayOf(1, 6, outH.toLong(), outW.toLong())
                 val audioShape = longArrayOf(1, 128, 16, 32)
                 val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
                 val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
                 val imgInput = FloatArray(imgSize) { 0.0f }
                 val audioInput = FloatArray(audioSize) { 0.0f }
+
+                // 尝试从 assets 加载一张 128x128 参考人脸图片，填入 6 通道图像输入（前 3 通道 + 后 3 通道复用同一张图）。
+                // 需要你在 app/src/main/assets 下自行放置一张 ref_face_128.png。
+                try {
+                    loadRefImageToTensor(this, "ref_face_128.png", imgInput, outW, outH)
+                } catch (e: Exception) {
+                    Log.e(LOG_TAG, "loadRefImageToTensor failed, fallback to zeros", e)
+                }
+
                 val imgBuffer = FloatBuffer.wrap(imgInput)
                 val audioBuffer = FloatBuffer.wrap(audioInput)
                 imgTensor = OnnxTensor.createTensor(env, imgBuffer, imgShape)
                 audioTensor = OnnxTensor.createTensor(env, audioBuffer, audioShape)
                 val inputNames = session.inputNames.toList()
 
-                // 简单循环：固定节奏推理并渲染到 SurfaceView（当前仅作为骨架打点，不做实际绘制）
+                bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                pixels = IntArray(outW * outH)
+
                 while (realtimeRunning) {
-                    // 这里预留从 audioQueue 取出 PCM -> 特征的逻辑；当前使用零特征占位。
                     val result = session.run(
                         mapOf(
                             inputNames[0] to imgTensor,
                             inputNames[1] to audioTensor
                         )
                     )
+                    @Suppress("UNCHECKED_CAST")
+                    val output = result[0].value as Array<Array<Array<FloatArray>>>
                     result.close()
 
-                    // 仅作为骨架示例：不做 Bitmap 转换，只在日志中打点。
-                    Log.d(LOG_TAG, "Realtime inference step done")
+                    val bmp = bitmap
+                    val px = pixels
+                    if (bmp != null && px != null && output.isNotEmpty()) {
+                        val c0 = output[0][0]
+                        val c1 = output[0][1]
+                        val c2 = output[0][2]
+                        var idx = 0
+                        var y = 0
+                        while (y < outH) {
+                            var x = 0
+                            while (x < outW) {
+                                val r = (c0[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
+                                val g = (c1[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
+                                val b = (c2[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
+                                px[idx++] =
+                                    (0xFF shl 24) or
+                                        (r.coerceIn(0, 255) shl 16) or
+                                        (g.coerceIn(0, 255) shl 8) or
+                                        b.coerceIn(0, 255)
+                                x++
+                            }
+                            y++
+                        }
+                        bmp.setPixels(px, 0, outW, 0, 0, outW, outH)
 
-                    // 简单节流：假设目标帧率 20 FPS
+                        val canvas = holder.lockCanvas()
+                        if (canvas != null) {
+                            try {
+                                canvas.drawColor(Color.BLACK)
+                                val dest = Rect(0, 0, canvas.width, canvas.height)
+                                canvas.drawBitmap(bmp, null, dest, null)
+                            } finally {
+                                holder.unlockCanvasAndPost(canvas)
+                            }
+                        }
+                    }
+
+                    Log.d(LOG_TAG, "Realtime inference step done")
                     Thread.sleep(50L)
                 }
             } catch (e: Exception) {
@@ -266,6 +320,52 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 realtimeRunning = false
             }
         })
+    }
+
+    /**
+     * 将 assets 中的一张 128x128 人脸图片编码进 U-Net 的 6 通道图像输入：
+     * - Bitmap 读取后缩放到 (width,height)
+     * - 归一化到 [0,1]
+     * - 同一张图复制到前 3 通道和后 3 通道（模拟两帧图像）。
+     */
+    private fun loadRefImageToTensor(
+        context: Context,
+        assetName: String,
+        imgInput: FloatArray,
+        width: Int,
+        height: Int
+    ) {
+        context.assets.open(assetName).use { input ->
+            val raw = BitmapFactory.decodeStream(input)
+            val bmp = Bitmap.createScaledBitmap(raw, width, height, true)
+            raw.recycle()
+
+            val hw = height * width
+            var y = 0
+            while (y < height) {
+                var x = 0
+                while (x < width) {
+                    val c = bmp.getPixel(x, y)
+                    val r = (Color.red(c) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val g = (Color.green(c) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val b = (Color.blue(c) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val idx = y * width + x
+
+                    // 通道顺序：假设为 [B,G,R, B,G,R]，与训练时 BGR*2 对齐。
+                    imgInput[0 * hw + idx] = b
+                    imgInput[1 * hw + idx] = g
+                    imgInput[2 * hw + idx] = r
+                    imgInput[3 * hw + idx] = b
+                    imgInput[4 * hw + idx] = g
+                    imgInput[5 * hw + idx] = r
+
+                    x++
+                }
+                y++
+            }
+
+            bmp.recycle()
+        }
     }
 
     private fun startAudioCapture() {
