@@ -119,6 +119,28 @@
    - 将当前 Ultralight 训练好的 U-Net 导出到 Android。
    - 在端上用固定音频特征（预先计算）驱动，验证端上 FPS。
 
+    具体操作脚本（已实现）：
+
+    - 在 `Ultralight-Digital-Human/` 目录下，使用脚本 `export_unet_wenet_onnx.py` 导出 ONNX：
+
+      ```bash
+      cd Ultralight-Digital-Human
+      # 假设训练好的权重在 ./checkpoint_wenet/net_epoch_200.pth
+      python export_unet_wenet_onnx.py \
+        --ckpt ./checkpoint_wenet/net_epoch_200.pth \
+        --out_dir ./onnx \
+        --name unet_wenet_160
+      ```
+
+      导出结果：
+      - `Ultralight-Digital-Human/onnx/unet_wenet_160.onnx`（FP32）
+      - `Ultralight-Digital-Human/onnx/unet_wenet_160_fp16.onnx`（若安装了 `onnx` 与 `onnxconverter-common`）
+
+    - 将 `unet_wenet_160.onnx` 拷贝到 Android 工程 `app/src/main/assets/`。
+    - 在 Android 端使用当前 `UnetBenchmarkActivity` 加载该模型，并在真机上记录：
+      - 平均每帧耗时（ms/frame）
+      - FPS（1000 / ms）
+
 2. **阶段二：新音频编码器 + U-Net 训练**
    - 在服务器上实现并训练 `AudioEncoderLite + LightUNetOnDevice`。
    - 评估服务器端单帧耗时与画质、唇形效果。

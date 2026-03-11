@@ -5,11 +5,12 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.microsoft.onnxruntime.OnnxTensor
-import com.microsoft.onnxruntime.OrtEnvironment
-import com.microsoft.onnxruntime.OrtSession
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.FloatBuffer
 
 class UnetBenchmarkActivity : AppCompatActivity() {
 
@@ -67,8 +68,11 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val imgInput = FloatArray(imgSize) { 0.0f }
         val audioInput = FloatArray(audioSize) { 0.0f }
 
-        val imgTensor = OnnxTensor.createTensor(env, imgInput, imgShape)
-        val audioTensor = OnnxTensor.createTensor(env, audioInput, audioShape)
+        val imgBuffer = FloatBuffer.wrap(imgInput)
+        val audioBuffer = FloatBuffer.wrap(audioInput)
+
+        val imgTensor = OnnxTensor.createTensor(env, imgBuffer, imgShape)
+        val audioTensor = OnnxTensor.createTensor(env, audioBuffer, audioShape)
 
         val inputNames = session.inputNames.toList()
 
