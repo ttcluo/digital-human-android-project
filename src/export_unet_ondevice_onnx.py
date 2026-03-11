@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch
 
-from models.unet_ondevice_light import OnDeviceUNet
+from src.models.unet_ondevice_light import OnDeviceUNet
 
 
 def export_fp32(model: torch.nn.Module, out_path: str) -> None:
