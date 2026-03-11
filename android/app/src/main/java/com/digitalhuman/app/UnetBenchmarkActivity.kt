@@ -27,17 +27,17 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val txt = findViewById<TextView>(R.id.txtResult)
 
         btn.setOnClickListener {
-            txt.text = "Running U-Net benchmark (FP32)..."
+            txt.text = "Running OnDevice U-Net benchmark (FP32)..."
             Thread {
                 try {
                     val ms = runUnetBenchmark(this, 50)
                     val fps = 1000f / ms
                     Log.i(
                         LOG_TAG,
-                        "U-Net FP32 benchmark: avg=%.3f ms/frame (%.2f FPS)".format(ms, fps)
+                        "OnDevice U-Net FP32 benchmark: avg=%.3f ms/frame (%.2f FPS)".format(ms, fps)
                     )
                     runOnUiThread {
-                        txt.text = "U-Net FP32: %.2f ms/frame (%.1f FPS)".format(ms, fps)
+                        txt.text = "OnDevice U-Net FP32: %.2f ms/frame (%.1f FPS)".format(ms, fps)
                     }
                 } catch (e: Exception) {
                     Log.e(LOG_TAG, "Benchmark failed", e)
@@ -61,16 +61,16 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     }
 
     /**
-     * 直接在 Kotlin 中用 ONNX Runtime 跑 FP32 U-Net benchmark。
-     * 需要将 unet_wenet_160.onnx 放到 app/src/main/assets 下。
+     * 在 Kotlin 中用 ONNX Runtime 跑端侧轻量 U-Net (OnDeviceUNet) 的 FP32 benchmark。
+     * 需要将 unet_ondevice_128.onnx 放到 app/src/main/assets 下。
      */
     private fun runUnetBenchmark(context: Context, iters: Int): Float {
         val env = OrtEnvironment.getEnvironment()
-        val modelFile = copyAssetToCache(context, "unet_wenet_160.onnx")
+        val modelFile = copyAssetToCache(context, "unet_ondevice_128.onnx")
         val session: OrtSession = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
 
-        // 预设输入形状：image [1,6,160,160], audio [1,128,16,32]
-        val imgShape = longArrayOf(1, 6, 160, 160)
+        // 预设输入形状：image [1,6,128,128], audio [1,128,16,32]
+        val imgShape = longArrayOf(1, 6, 128, 128)
         val audioShape = longArrayOf(1, 128, 16, 32)
         val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
         val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
