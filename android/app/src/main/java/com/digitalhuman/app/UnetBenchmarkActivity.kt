@@ -126,7 +126,10 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
     private fun copyAssetToCache(context: Context, assetName: String): File {
         val outFile = File(context.cacheDir, assetName)
-        if (outFile.exists()) return outFile
+        // 始终覆盖，避免升级 ONNX/资源后仍然使用旧的 cache 文件。
+        if (outFile.exists()) {
+            outFile.delete()
+        }
         context.assets.open(assetName).use { input ->
             FileOutputStream(outFile).use { output ->
                 input.copyTo(output)
@@ -224,6 +227,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             var audioTensor: OnnxTensor? = null
             var bitmap: Bitmap? = null
             var pixels: IntArray? = null
+            var debugFrameSaved = false
             try {
                 env = OrtEnvironment.getEnvironment()
                 val modelFile = copyAssetToCache(this, "unet_ondevice_128.onnx")
@@ -319,33 +323,19 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                         val c1 = output[0][1]
                         val c2 = output[0][2]
 
-                        val base = refFaceBitmap
+                        // 为了在端上更直观地看到网络输出，这里使用伪彩色 debug 渲染：
+                        // - 不与底图混合，只根据 U-Net 第 0 通道的值着色
+                        // - v < 0.33 -> 蓝色, 0.33–0.66 -> 绿色, >0.66 -> 红色
                         var idx = 0
                         var y = 0
                         while (y < outH) {
                             var x = 0
                             while (x < outW) {
-                                val fr = c0[y][x].coerceIn(0.0f, 1.0f)
-                                val fg = c1[y][x].coerceIn(0.0f, 1.0f)
-                                val fb = c2[y][x].coerceIn(0.0f, 1.0f)
-
-                                var outR: Int
-                                var outG: Int
-                                var outB: Int
-
-                                if (base != null && !base.isRecycled) {
-                                    val bc = base.getPixel(x, y)
-                                    val br = Color.red(bc) / 255.0f
-                                    val bg = Color.green(bc) / 255.0f
-                                    val bb = Color.blue(bc) / 255.0f
-                                    // 简单线性混合：大部分来自 U-Net 预测，小部分保留底图细节
-                                    outR = ((fr * 0.7f + br * 0.3f) * 255.0f).toInt()
-                                    outG = ((fg * 0.7f + bg * 0.3f) * 255.0f).toInt()
-                                    outB = ((fb * 0.7f + bb * 0.3f) * 255.0f).toInt()
-                                } else {
-                                    outR = (fr * 255.0f).toInt()
-                                    outG = (fg * 255.0f).toInt()
-                                    outB = (fb * 255.0f).toInt()
+                                val v = c0[y][x].coerceIn(0.0f, 1.0f)
+                                val (outR, outG, outB) = when {
+                                    v < 0.33f -> Triple(0, 0, 255)        // 蓝
+                                    v < 0.66f -> Triple(0, 255, 0)        // 绿
+                                    else -> Triple(255, 0, 0)             // 红
                                 }
 
                                 px[idx++] =
@@ -368,6 +358,41 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                             } finally {
                                 holder.unlockCanvasAndPost(canvas)
                             }
+                        }
+
+                        // 仅保存第一帧 debug 图到本地文件，方便你直接查看像素结果。
+                        if (!debugFrameSaved) {
+                            try {
+                                val outFile = File(filesDir, "unet_debug_frame.png")
+                                FileOutputStream(outFile).use { fos ->
+                                    bmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                                }
+                                Log.i(
+                                    LOG_TAG,
+                                    "Saved debug U-Net frame to: ${outFile.absolutePath}"
+                                )
+                                // 打印若干像素值作为额外参考
+                                val sample = buildString {
+                                    append("sample pixels: ")
+                                    val sx = listOf(32, 64, 96)
+                                    val sy = listOf(32, 64, 96)
+                                    for (yy in sy) {
+                                        for (xx in sx) {
+                                            val c = bmp.getPixel(xx, yy)
+                                            append(
+                                                "($xx,$yy)=" +
+                                                    "${Color.red(c)}," +
+                                                    "${Color.green(c)}," +
+                                                    "${Color.blue(c)}; "
+                                            )
+                                        }
+                                    }
+                                }
+                                Log.i(LOG_TAG, sample)
+                            } catch (e: Exception) {
+                                Log.e(LOG_TAG, "save debug frame failed", e)
+                            }
+                            debugFrameSaved = true
                         }
                     }
 
