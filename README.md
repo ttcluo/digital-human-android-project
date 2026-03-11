@@ -116,6 +116,24 @@ digital-human-android-project/
 - **ONNX Runtime**: 1.16.3
 - **CUDA**: 11.7
 
+## 阶段性结果：端侧 U-Net 性能与效果
+
+基于单人 5 分钟训练视频（WeNet 特征），我们在服务器与 Android 端分别验证了原始 Ultralight U-Net 与端侧轻量 OnDeviceUNet 的性能与效果。
+
+- **服务器 A800（PyTorch 直接前向）**
+  - 原始 U-Net（输入 160×160）：约 **7.15 ms/帧（≈ 140 FPS）**
+  - OnDeviceUNet（输入 128×128，通道 [8,16,32,48,64]）：约 **7.3 ms/帧（≈ 137 FPS）**
+- **Android 端（ONNX Runtime FP32，真机）**
+  - 原始 U-Net（160×160，对应 `unet_wenet_160.onnx`）：稳态约 **104 ms/帧（≈ 9.6 FPS）**
+  - OnDeviceUNet（128×128，对应 `unet_ondevice_128.onnx`）：稳态多次实测约 **10–13 ms/帧（≈ 80–100 FPS）**
+
+在视觉上，通过 `run_compare_ultra_ondevice_wenet.py` 生成的左右对比视频（左：原 U-Net，右：OnDeviceUNet）显示：
+
+- 嘴型开合时机与形状几乎一致；
+- 面部细节与整体稳定性在当前数据规模下未出现明显退化。
+
+结论：在保持主观效果基本不变的前提下，**端上 U-Net 推理耗时从百毫秒级降到十毫秒级**，为后续完整端侧实时数字人（含音频编码 + 渲染）提供了充足的算力空间。
+
 ## 环境验证
 
 ### 快速验证
