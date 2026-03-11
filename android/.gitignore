@@ -1,0 +1,22 @@
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+*.iml
+local.properties
+.gradle/
+.cxx/
+app/build/
+app/release/
+*.onnx
+*.keystore
+*.jks
+
+captures/
+**build/            
+.cxx/
+.gradle/
+.idea/
+.vscode/
+.DS_Store
