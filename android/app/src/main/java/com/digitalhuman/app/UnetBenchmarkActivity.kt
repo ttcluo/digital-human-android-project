@@ -1,6 +1,8 @@
 package com.digitalhuman.app
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -11,6 +13,8 @@ import android.view.SurfaceView
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -25,6 +29,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         private const val LOG_TAG = "UnetBenchmark"
         private const val SAMPLE_RATE = 16000
         private const val AUDIO_QUEUE_CAPACITY = 32
+        private const val REQ_RECORD_AUDIO = 1001
     }
 
     // Realtime demo相关字段（骨架实现）
@@ -69,8 +74,42 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
         btnRealtime.setOnClickListener {
             if (!realtimeRunning) {
-                txt.text = "Starting realtime demo (skeleton)..."
-                startRealtimeDemo()
+                if (!ensureRecordAudioPermission()) {
+                    txt.text = "需要录音权限才能启动实时 demo"
+                } else {
+                    txt.text = "Starting realtime demo (skeleton)..."
+                    startRealtimeDemo()
+                }
+            }
+        }
+    }
+
+    private fun ensureRecordAudioPermission(): Boolean {
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                REQ_RECORD_AUDIO
+            )
+        }
+        return granted
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_RECORD_AUDIO) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.i(LOG_TAG, "RECORD_AUDIO permission granted")
+            } else {
+                Log.e(LOG_TAG, "RECORD_AUDIO permission denied by user")
             }
         }
     }
@@ -185,7 +224,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 audioTensor = OnnxTensor.createTensor(env, audioBuffer, audioShape)
                 val inputNames = session.inputNames.toList()
 
-                // 简单循环：固定节奏推理并渲染到 SurfaceView
+                // 简单循环：固定节奏推理并渲染到 SurfaceView（当前仅作为骨架打点，不做实际绘制）
                 while (realtimeRunning) {
                     // 这里预留从 audioQueue 取出 PCM -> 特征的逻辑；当前使用零特征占位。
                     val result = session.run(
@@ -194,11 +233,10 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                             inputNames[1] to audioTensor
                         )
                     )
-                    val output = result[0].value as Array<FloatArray>
                     result.close()
 
                     // 仅作为骨架示例：不做 Bitmap 转换，只在日志中打点。
-                    Log.d(LOG_TAG, "Realtime inference step done, output[0][0]=${output[0][0]}")
+                    Log.d(LOG_TAG, "Realtime inference step done")
 
                     // 简单节流：假设目标帧率 20 FPS
                     Thread.sleep(50L)
