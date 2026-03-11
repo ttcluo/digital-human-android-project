@@ -333,7 +333,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                                 var outG: Int
                                 var outB: Int
 
-                                if (base != null) {
+                                if (base != null && !base.isRecycled) {
                                     val bc = base.getPixel(x, y)
                                     val br = Color.red(bc) / 255.0f
                                     val bg = Color.green(bc) / 255.0f
@@ -467,10 +467,9 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         context.assets.open(assetName).use { input ->
             val raw = BitmapFactory.decodeStream(input)
             val bmp = Bitmap.createScaledBitmap(raw, width, height, true)
-            raw.recycle()
-
-            // 保留一份用于后续将 U-Net patch 贴回整张人脸
-            refFaceBitmap = bmp
+            // 不主动 recycle raw/bmp，交给 GC，避免后续误用已回收 bitmap。
+            // 为参考底图单独拷贝一份不可变 ARGB_8888 bitmap。
+            refFaceBitmap = bmp.copy(Bitmap.Config.ARGB_8888, false)
 
             val hw = height * width
 
