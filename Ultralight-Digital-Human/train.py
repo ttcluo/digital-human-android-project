@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import cv2
 import torch
 import numpy as np
@@ -27,6 +28,13 @@ def get_args():
     parser.add_argument('--batchsize', type=int, default=1)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--asr', type=str, default="hubert")
+    parser.add_argument(
+        '--unet',
+        type=str,
+        default='ultralight',
+        choices=['ultralight', 'ondevice'],
+        help="选择 U-Net 结构：原始 ultralight 或端侧轻量 ondevice",
+    )
 
     return parser.parse_args()
 
@@ -136,7 +144,19 @@ def train(net, epoch, batch_size, lr):
             
 
 if __name__ == '__main__':
-    
-    
-    net = Model(6, args.asr).to(device)
+    # 根据参数选择 U-Net 结构
+    if args.unet == 'ondevice':
+        # 将项目根目录加入 sys.path，导入 src 内的端侧轻量模型
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.append(repo_root)
+        from src.models.unet_ondevice_light import OnDeviceUNet  # type: ignore
+
+        if args.asr != 'wenet':
+            raise ValueError("OnDeviceUNet 目前只支持 asr=wenet，请使用参数 --asr wenet")
+
+        net = OnDeviceUNet(6).to(device)
+    else:
+        net = Model(6, args.asr).to(device)
+
     train(net, args.epochs, args.batchsize, args.lr)
