@@ -198,6 +198,11 @@ class OnDeviceUNet(nn.Module):
         x5 = self.down4(x4)
 
         audio_feat = self.audio_model(audio_feat)
+        # 对齐空间尺寸，避免下采样路径与音频分支步长差异导致的形状不一致
+        if audio_feat.shape[2:] != x5.shape[2:]:
+            audio_feat = F.interpolate(
+                audio_feat, size=x5.shape[2:], mode="bilinear", align_corners=False
+            )
         x5 = torch.cat([x5, audio_feat], dim=1)
         x5 = self.fuse_conv(x5)
 
