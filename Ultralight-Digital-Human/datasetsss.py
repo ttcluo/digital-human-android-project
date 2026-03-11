@@ -31,7 +31,9 @@ class MyDataset(Dataset):
         self.audio_feats = self.audio_feats.astype(np.float32)
         
     def __len__(self):
-        return self.audio_feats.shape[0] if self.audio_feats[0]<len(self.img_path_list) else len(self.img_path_list)
+        num_audio = self.audio_feats.shape[0]
+        num_images = len(self.img_path_list)
+        return min(num_audio, num_images)
     
     def get_audio_features(self, features, index):  # 在当前音频帧前后各取4帧音频特征
         left = index - 4
