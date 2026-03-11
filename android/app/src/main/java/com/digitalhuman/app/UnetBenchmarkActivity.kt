@@ -2,6 +2,7 @@ package com.digitalhuman.app
 
 import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -14,6 +15,10 @@ import java.nio.FloatBuffer
 
 class UnetBenchmarkActivity : AppCompatActivity() {
 
+    companion object {
+        private const val LOG_TAG = "UnetBenchmark"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -22,15 +27,20 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val txt = findViewById<TextView>(R.id.txtResult)
 
         btn.setOnClickListener {
-            txt.text = "Running U-Net benchmark..."
+            txt.text = "Running U-Net benchmark (FP16)..."
             Thread {
                 try {
                     val ms = runUnetBenchmark(this, 50)
                     val fps = 1000f / ms
+                    Log.i(
+                        LOG_TAG,
+                        "U-Net FP16 benchmark: avg=%.3f ms/frame (%.2f FPS)".format(ms, fps)
+                    )
                     runOnUiThread {
-                        txt.text = "U-Net: %.2f ms/frame (%.1f FPS)".format(ms, fps)
+                        txt.text = "U-Net FP16: %.2f ms/frame (%.1f FPS)".format(ms, fps)
                     }
                 } catch (e: Exception) {
+                    Log.e(LOG_TAG, "Benchmark failed", e)
                     runOnUiThread {
                         txt.text = "Benchmark failed: ${e.message}"
                     }
@@ -52,11 +62,11 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
     /**
      * 在当前设备上对 U-Net ONNX 进行前向推理基准测试。
-     * 需要将 unet_wenet_160.onnx 放到 app/src/main/assets 下。
+     * 需要将 unet_wenet_160_fp16.onnx 放到 app/src/main/assets 下。
      */
     private fun runUnetBenchmark(context: Context, iters: Int): Float {
         val env = OrtEnvironment.getEnvironment()
-        val modelFile = copyAssetToCache(context, "unet_wenet_160.onnx")
+        val modelFile = copyAssetToCache(context, "unet_wenet_160_fp16.onnx")
         val session: OrtSession = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
 
         // 预设输入形状：image [1,6,160,160], audio [1,128,16,32]
