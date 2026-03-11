@@ -78,3 +78,7 @@ android/captures/
 android/**/build/
 *.keystore
 *.jks
+
+# profiler dumps
+*.hprof
+
