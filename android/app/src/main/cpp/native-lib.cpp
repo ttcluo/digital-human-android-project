@@ -23,4 +23,3 @@ Java_com_digitalhuman_app_UnetBenchmarkActivity_nativeDummyBenchmark(
     LOGI("dummy benchmark avg_ms=%.4f", ms);
     return ms;
 }
-

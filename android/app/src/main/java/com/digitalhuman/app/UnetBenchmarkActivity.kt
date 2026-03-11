@@ -11,7 +11,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.ShortBuffer
+import java.nio.FloatBuffer
 
 class UnetBenchmarkActivity : AppCompatActivity() {
 
@@ -27,17 +27,17 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val txt = findViewById<TextView>(R.id.txtResult)
 
         btn.setOnClickListener {
-            txt.text = "Running U-Net benchmark (FP16)..."
+            txt.text = "Running U-Net benchmark (FP32)..."
             Thread {
                 try {
                     val ms = runUnetBenchmark(this, 50)
                     val fps = 1000f / ms
                     Log.i(
                         LOG_TAG,
-                        "U-Net FP16 benchmark: avg=%.3f ms/frame (%.2f FPS)".format(ms, fps)
+                        "U-Net FP32 benchmark: avg=%.3f ms/frame (%.2f FPS)".format(ms, fps)
                     )
                     runOnUiThread {
-                        txt.text = "U-Net FP16: %.2f ms/frame (%.1f FPS)".format(ms, fps)
+                        txt.text = "U-Net FP32: %.2f ms/frame (%.1f FPS)".format(ms, fps)
                     }
                 } catch (e: Exception) {
                     Log.e(LOG_TAG, "Benchmark failed", e)
@@ -61,12 +61,12 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     }
 
     /**
-     * 在当前设备上对 U-Net ONNX 进行前向推理基准测试。
-     * 需要将 unet_wenet_160_fp16.onnx 放到 app/src/main/assets 下。
+     * 直接在 Kotlin 中用 ONNX Runtime 跑 FP32 U-Net benchmark。
+     * 需要将 unet_wenet_160.onnx 放到 app/src/main/assets 下。
      */
     private fun runUnetBenchmark(context: Context, iters: Int): Float {
         val env = OrtEnvironment.getEnvironment()
-        val modelFile = copyAssetToCache(context, "unet_wenet_160_fp16.onnx")
+        val modelFile = copyAssetToCache(context, "unet_wenet_160.onnx")
         val session: OrtSession = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
 
         // 预设输入形状：image [1,6,160,160], audio [1,128,16,32]
@@ -75,12 +75,11 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
         val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
 
-        // FP16 模型需要 tensor(float16)，Java 端用 ShortBuffer 表示 half。
-        val imgHalf = ShortArray(imgSize) { 0 }
-        val audioHalf = ShortArray(audioSize) { 0 }
+        val imgInput = FloatArray(imgSize) { 0.0f }
+        val audioInput = FloatArray(audioSize) { 0.0f }
 
-        val imgBuffer = ShortBuffer.wrap(imgHalf)
-        val audioBuffer = ShortBuffer.wrap(audioHalf)
+        val imgBuffer = FloatBuffer.wrap(imgInput)
+        val audioBuffer = FloatBuffer.wrap(audioInput)
 
         val imgTensor = OnnxTensor.createTensor(env, imgBuffer, imgShape)
         val audioTensor = OnnxTensor.createTensor(env, audioBuffer, audioShape)
@@ -89,19 +88,23 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
         // 预热
         repeat(5) {
-            session.run(mapOf(
-                inputNames[0] to imgTensor,
-                inputNames[1] to audioTensor
-            )).close()
+            session.run(
+                mapOf(
+                    inputNames[0] to imgTensor,
+                    inputNames[1] to audioTensor
+                )
+            ).close()
         }
 
         val iterations = if (iters > 0) iters else 50
         val t0 = System.nanoTime()
         repeat(iterations) {
-            session.run(mapOf(
-                inputNames[0] to imgTensor,
-                inputNames[1] to audioTensor
-            )).close()
+            session.run(
+                mapOf(
+                    inputNames[0] to imgTensor,
+                    inputNames[1] to audioTensor
+                )
+            ).close()
         }
         val t1 = System.nanoTime()
 
@@ -114,5 +117,3 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         return (avgNs / 1_000_000.0).toFloat()
     }
 }
-
-
