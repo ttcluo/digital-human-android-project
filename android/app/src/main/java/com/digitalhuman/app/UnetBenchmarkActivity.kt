@@ -49,6 +49,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     private var wenetFeatFrames: FloatArray? = null
     private var wenetFrameCount: Int = 0
     private var wenetFeatSize: Int = 0
+    private var refFaceBitmap: Bitmap? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -204,9 +205,6 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             return
         }
 
-        // 启动音频采集线程（骨架：采集后丢进队列，暂不参与推理）
-        startAudioCapture()
-
         // 预加载伪流式 WeNet 特征（如果存在的话）
         if (wenetFeatFrames == null) {
             try {
@@ -258,8 +256,10 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
                 bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
                 pixels = IntArray(outW * outH)
+                Log.i(LOG_TAG, "Realtime demo init: outH=$outH, outW=$outW, imgSize=$imgSize, audioSize=$audioSize")
 
                 var audioFrameIndex = 0
+                var frameCounter = 0
 
                 while (realtimeRunning) {
                     // 每帧从预生成的 WeNet 特征序列中取出一帧填充 audioInput；如果没有则保持全 0。
@@ -287,23 +287,72 @@ class UnetBenchmarkActivity : AppCompatActivity() {
 
                     val bmp = bitmap
                     val px = pixels
-                    if (bmp != null && px != null && output.isNotEmpty()) {
+                    if (bmp == null || px == null) {
+                        Log.w(LOG_TAG, "Bitmap or pixels is null, skip rendering")
+                    } else if (output.isEmpty()
+                        || output[0].isEmpty()
+                        || output[0][0].isEmpty()
+                        || output[0][0][0].isEmpty()
+                    ) {
+                        Log.w(LOG_TAG, "Output tensor is empty, skip rendering")
+                    } else {
+                        // 每隔若干帧打印一次输出范围，确认是否全部为 0 或接近 0
+                        if (frameCounter % 10 == 0) {
+                            var minVal = Float.POSITIVE_INFINITY
+                            var maxVal = Float.NEGATIVE_INFINITY
+                            val c0dbg = output[0][0]
+                            var yDbg = 0
+                            while (yDbg < outH) {
+                                var xDbg = 0
+                                while (xDbg < outW) {
+                                    val v = c0dbg[yDbg][xDbg]
+                                    if (v < minVal) minVal = v
+                                    if (v > maxVal) maxVal = v
+                                    xDbg++
+                                }
+                                yDbg++
+                            }
+                            Log.d(LOG_TAG, "U-Net output[0] range: min=$minVal, max=$maxVal")
+                        }
+
                         val c0 = output[0][0]
                         val c1 = output[0][1]
                         val c2 = output[0][2]
+
+                        val base = refFaceBitmap
                         var idx = 0
                         var y = 0
                         while (y < outH) {
                             var x = 0
                             while (x < outW) {
-                                val r = (c0[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
-                                val g = (c1[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
-                                val b = (c2[y][x].coerceIn(0.0f, 1.0f) * 255.0f).toInt()
+                                val fr = c0[y][x].coerceIn(0.0f, 1.0f)
+                                val fg = c1[y][x].coerceIn(0.0f, 1.0f)
+                                val fb = c2[y][x].coerceIn(0.0f, 1.0f)
+
+                                var outR: Int
+                                var outG: Int
+                                var outB: Int
+
+                                if (base != null) {
+                                    val bc = base.getPixel(x, y)
+                                    val br = Color.red(bc) / 255.0f
+                                    val bg = Color.green(bc) / 255.0f
+                                    val bb = Color.blue(bc) / 255.0f
+                                    // 简单线性混合：大部分来自 U-Net 预测，小部分保留底图细节
+                                    outR = ((fr * 0.7f + br * 0.3f) * 255.0f).toInt()
+                                    outG = ((fg * 0.7f + bg * 0.3f) * 255.0f).toInt()
+                                    outB = ((fb * 0.7f + bb * 0.3f) * 255.0f).toInt()
+                                } else {
+                                    outR = (fr * 255.0f).toInt()
+                                    outG = (fg * 255.0f).toInt()
+                                    outB = (fb * 255.0f).toInt()
+                                }
+
                                 px[idx++] =
                                     (0xFF shl 24) or
-                                        (r.coerceIn(0, 255) shl 16) or
-                                        (g.coerceIn(0, 255) shl 8) or
-                                        b.coerceIn(0, 255)
+                                        (outR.coerceIn(0, 255) shl 16) or
+                                        (outG.coerceIn(0, 255) shl 8) or
+                                        outB.coerceIn(0, 255)
                                 x++
                             }
                             y++
@@ -323,6 +372,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                     }
 
                     Log.d(LOG_TAG, "Realtime inference step done")
+                    frameCounter++
                     Thread.sleep(50L)
                 }
             } catch (e: Exception) {
@@ -374,7 +424,9 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 throw IllegalStateException("WeNet 特征维度不匹配: C=$C,H=$H,W=$W, 期望 128,16,32")
             }
             val featSize = C * H * W
-            val total = T * featSize
+            // 为避免在手机上一次性加载过长语音导致 OOM，这里只截取前 N 帧。
+            val framesToLoad = minOf(T, 200) // 例如最多加载约 200 帧
+            val total = framesToLoad * featSize
             val dataBytes = ByteArray(total * 4)
             var offset = 0
             while (offset < dataBytes.size) {
@@ -390,11 +442,11 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             val arr = FloatArray(total)
             floatBuf.get(arr)
             wenetFeatFrames = arr
-            wenetFrameCount = T
+            wenetFrameCount = framesToLoad
             wenetFeatSize = featSize
             Log.i(
                 LOG_TAG,
-                "Loaded WeNet feat stream: T=$T, C=$C, H=$H, W=$W, total=${arr.size}"
+                "Loaded WeNet feat stream: T=$T, useFrames=$framesToLoad, C=$C, H=$H, W=$W, total=${arr.size}"
             )
         }
     }
@@ -417,35 +469,60 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             val bmp = Bitmap.createScaledBitmap(raw, width, height, true)
             raw.recycle()
 
+            // 保留一份用于后续将 U-Net patch 贴回整张人脸
+            refFaceBitmap = bmp
+
             val hw = height * width
+
+            // 构造两张图：一张原始参考图，一张中间区域涂黑的 masked 图，用于模拟训练时的 [参考图, 被遮挡图] 输入。
+            val masked = bmp.copy(Bitmap.Config.ARGB_8888, true)
+            val maskCanvas = android.graphics.Canvas(masked)
+            val margin = (width * 0.08f).toInt()   // 近似 (5/160) 的相对边距
+            val rect = android.graphics.Rect(
+                margin,
+                margin,
+                width - margin,
+                height - margin
+            )
+            maskCanvas.drawRect(rect, android.graphics.Paint().apply { color = Color.BLACK })
+
             var y = 0
             while (y < height) {
                 var x = 0
                 while (x < width) {
-                    val c = bmp.getPixel(x, y)
-                    val r = (Color.red(c) / 255.0f).coerceIn(0.0f, 1.0f)
-                    val g = (Color.green(c) / 255.0f).coerceIn(0.0f, 1.0f)
-                    val b = (Color.blue(c) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val cRef = bmp.getPixel(x, y)
+                    val cMask = masked.getPixel(x, y)
+
+                    val rRef = (Color.red(cRef) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val gRef = (Color.green(cRef) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val bRef = (Color.blue(cRef) / 255.0f).coerceIn(0.0f, 1.0f)
+
+                    val rMask = (Color.red(cMask) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val gMask = (Color.green(cMask) / 255.0f).coerceIn(0.0f, 1.0f)
+                    val bMask = (Color.blue(cMask) / 255.0f).coerceIn(0.0f, 1.0f)
+
                     val idx = y * width + x
 
-                    // 通道顺序：假设为 [B,G,R, B,G,R]，与训练时 BGR*2 对齐。
-                    imgInput[0 * hw + idx] = b
-                    imgInput[1 * hw + idx] = g
-                    imgInput[2 * hw + idx] = r
-                    imgInput[3 * hw + idx] = b
-                    imgInput[4 * hw + idx] = g
-                    imgInput[5 * hw + idx] = r
+                    // 通道顺序：[参考 B,G,R, 被遮挡 B,G,R]，与训练时 BGR*2 对齐。
+                    imgInput[0 * hw + idx] = bRef
+                    imgInput[1 * hw + idx] = gRef
+                    imgInput[2 * hw + idx] = rRef
+                    imgInput[3 * hw + idx] = bMask
+                    imgInput[4 * hw + idx] = gMask
+                    imgInput[5 * hw + idx] = rMask
 
                     x++
                 }
                 y++
             }
-
-            bmp.recycle()
         }
     }
 
     private fun startAudioCapture() {
+        // 录音相关逻辑暂时关闭，避免对当前端上全链路调试产生干扰。
+        Log.i(LOG_TAG, "startAudioCapture() skipped (audio disabled)")
+        return
+        /*
         val minBufSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -480,6 +557,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             record.stop()
             record.release()
         }.also { it.start() }
+        */
     }
 
     private fun stopAudioCapture() {
