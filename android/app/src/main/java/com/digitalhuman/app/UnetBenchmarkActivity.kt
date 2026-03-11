@@ -11,7 +11,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.FloatBuffer
+import java.nio.ShortBuffer
 
 class UnetBenchmarkActivity : AppCompatActivity() {
 
@@ -75,11 +75,12 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
         val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
 
-        val imgInput = FloatArray(imgSize) { 0.0f }
-        val audioInput = FloatArray(audioSize) { 0.0f }
+        // FP16 模型需要 tensor(float16)，Java 端用 ShortBuffer 表示 half。
+        val imgHalf = ShortArray(imgSize) { 0 }
+        val audioHalf = ShortArray(audioSize) { 0 }
 
-        val imgBuffer = FloatBuffer.wrap(imgInput)
-        val audioBuffer = FloatBuffer.wrap(audioInput)
+        val imgBuffer = ShortBuffer.wrap(imgHalf)
+        val audioBuffer = ShortBuffer.wrap(audioHalf)
 
         val imgTensor = OnnxTensor.createTensor(env, imgBuffer, imgShape)
         val audioTensor = OnnxTensor.createTensor(env, audioBuffer, audioShape)
