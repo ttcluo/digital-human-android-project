@@ -116,9 +116,9 @@ def main() -> None:
     feats = np.load(args.audio_npy).astype(np.float32)
     print(f"[INFO] audio feats shape: {feats.shape}")
     idx = max(0, min(args.frame_idx, feats.shape[0] - 1))
-    aud = get_audio_features(feats, idx)  # [8, D]
-    aud = aud.reshape(128, 16, 32)[None]  # [1,128,16,32]
-    audio_t = torch.from_numpy(aud).to(device)
+    aud = get_audio_features(feats, idx)  # Tensor [8, D]
+    aud = aud.reshape(128, 16, 32)[None]  # Tensor [1,128,16,32]
+    audio_t = aud.to(device)
 
     # 加载模型
     net = OnDeviceUNet(6).to(device)
