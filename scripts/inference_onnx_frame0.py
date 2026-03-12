@@ -113,6 +113,27 @@ def main():
 
     img_path = img_dir / f"{img_idx}.jpg"
     lms_path = lms_dir / f"{img_idx}.lms"
+    if not img_path.exists() or not lms_path.exists():
+        print(f"错误: 未找到 {img_path} 或 {lms_path}")
+        sys.exit(1)
+    lms = parse_landmarks(str(lms_path))
+    xmin = int(lms[1][0])
+    ymin = int(lms[52][1])
+    xmax = int(lms[31][0])
+    width = xmax - xmin
+    ymax = ymin + width
+
+    if args.decoder == "pil":
+        from PIL import Image
+        pil_img = Image.open(str(img_path))
+        if pil_img.mode != "RGB":
+            pil_img = pil_img.convert("RGB")
+        img = np.array(pil_img)[:, :, ::-1].copy()  # RGB -> BGR
+    else:
+        img = cv2.imread(str(img_path))
+
+    crop_h_orig = ymax - ymin
+    crop_w_orig = xmax - xmin
 
     if args.use_crop:
         crop_path = Path(args.use_crop)
@@ -123,30 +144,10 @@ def main():
         if crop_img is None or crop_img.shape[0] != 168 or crop_img.shape[1] != 168:
             print(f"错误: crop 需为 168x168，实际 {crop_img.shape if crop_img is not None else None}")
             sys.exit(1)
-        # Android Bitmap 保存 PNG 为 RGB，cv2 读入为 BGR，需转回 BGR 以匹配模型输入
         crop_img = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
-        h, w = 168, 168
         print(f"使用 Android crop: {crop_path}")
     else:
-        if not img_path.exists() or not lms_path.exists():
-            print(f"错误: 未找到 {img_path} 或 {lms_path}")
-            sys.exit(1)
-        if args.decoder == "pil":
-            from PIL import Image
-            pil_img = Image.open(str(img_path))
-            if pil_img.mode != "RGB":
-                pil_img = pil_img.convert("RGB")
-            img = np.array(pil_img)[:, :, ::-1].copy()  # RGB -> BGR
-        else:
-            img = cv2.imread(str(img_path))
-        lms = parse_landmarks(str(lms_path))
-        xmin = int(lms[1][0])
-        ymin = int(lms[52][1])
-        xmax = int(lms[31][0])
-        width = xmax - xmin
-        ymax = ymin + width
         crop_img = img[ymin:ymax, xmin:xmax]
-        h, w = crop_img.shape[:2]
         crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_LINEAR)
     crop_img_ori = crop_img.copy()
 
@@ -199,7 +200,7 @@ def main():
         print(f"已保存 raw 输出: {raw_path}")
 
     crop_img_ori[4:164, 4:164] = pred
-    crop_img_ori = cv2.resize(crop_img_ori, (w, h))
+    crop_img_ori = cv2.resize(crop_img_ori, (crop_w_orig, crop_h_orig))
     img[ymin:ymax, xmin:xmax] = crop_img_ori
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
