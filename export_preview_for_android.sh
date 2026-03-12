@@ -16,6 +16,7 @@ if [[ ! -f "$AUDIO" ]]; then
   exit 1
 fi
 
+AUDIO="$(cd "$(dirname "$AUDIO")" && pwd)/$(basename "$AUDIO")"
 BASE="${AUDIO%.*}"
 WAV="${BASE}.wav"
 NPY="${BASE}_wenet.npy"
