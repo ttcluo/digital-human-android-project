@@ -144,7 +144,8 @@ def main():
         if crop_img is None or crop_img.shape[0] != 168 or crop_img.shape[1] != 168:
             print(f"错误: crop 需为 168x168，实际 {crop_img.shape if crop_img is not None else None}")
             sys.exit(1)
-        crop_img = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
+        # cv2.imread 读 PNG 得 BGR；Android Bitmap 存 PNG 为 RGB，读入后 ch0=R ch2=B，需交换为 BGR
+        crop_img = crop_img[:, :, [2, 1, 0]].copy()
         print(f"使用 Android crop: {crop_path}")
     else:
         crop_img = img[ymin:ymax, xmin:xmax]
