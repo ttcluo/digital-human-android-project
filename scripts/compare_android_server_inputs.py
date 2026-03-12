@@ -84,6 +84,14 @@ def main():
         a_img = load_bin(android_img, s_img.shape)
         print("=== img 输入对比 ===")
         compare("img", s_img, a_img)
+        # 若 real_B/real_R 差异数相同，尝试 B/R 交换后对比
+        a_swap = a_img.copy()
+        a_swap[:, [0, 2], :, :] = a_img[:, [2, 0], :, :]
+        a_swap[:, [3, 5], :, :] = a_img[:, [5, 3], :, :]
+        diff_swap = np.abs(s_img.astype(np.float64) - a_swap.astype(np.float64))
+        if diff_swap.max() < np.abs(s_img.astype(np.float64) - a_img.astype(np.float64)).max():
+            print("  [提示] Android B/R 交换后 max_diff=%.6f，可能 Android 通道顺序为 RGB" % diff_swap.max())
+            compare("img(BR交换后)", s_img, a_swap)
 
         if args.verbose:
             _diagnose_img_diff(s_img, a_img, data_dir)
