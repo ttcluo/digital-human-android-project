@@ -154,7 +154,8 @@ def main():
 
     img_real_ex = crop_img[4:164, 4:164].copy()
     img_real_ex_ori = img_real_ex.copy()
-    img_masked_np = cv2.rectangle(img_real_ex_ori.copy(), (5, 5, 150, 145), (0, 0, 0), -1)
+    # pt1, pt2 格式；若用 (5,5,150,145) 单参数会被当作 (x,y,w,h) 导致 mask 过大
+    img_masked_np = cv2.rectangle(img_real_ex_ori.copy(), (5, 5), (150, 145), (0, 0, 0), -1)
 
     img_real_ex = img_real_ex.transpose(2, 0, 1).astype(np.float32) / 255.0
     img_masked = img_masked_np.transpose(2, 0, 1).astype(np.float32) / 255.0
