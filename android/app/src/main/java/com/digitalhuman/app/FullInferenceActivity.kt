@@ -297,9 +297,7 @@ class FullInferenceActivity : AppCompatActivity() {
 
             val pred160 = outputToBitmap(output, inputSize)
             val crop168Out = crop168.copy(Bitmap.Config.ARGB_8888, true)
-            val canvas = Canvas(crop168Out)
-            val noFilterPaint = Paint().apply { isFilterBitmap = false }
-            canvas.drawBitmap(pred160, null, Rect(4, 4, 164, 164), noFilterPaint)
+            pastePredToCrop168(crop168Out, pred160)
             pred160.recycle()
 
             val cropResized = Bitmap.createScaledBitmap(crop168Out, cropW, cropH, true)
@@ -475,6 +473,40 @@ class FullInferenceActivity : AppCompatActivity() {
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(outPx, 0, w, 0, 0, w, h)
         return result
+    }
+
+    /**
+     * 贴回 pred 到 crop[4:164, 4:164]。右/下边缘有毛玻璃感时，对右、下各 6 像素做与原图融合。
+     */
+    private fun pastePredToCrop168(crop168: Bitmap, pred160: Bitmap) {
+        val predPx = IntArray(PATCH_160 * PATCH_160)
+        pred160.getPixels(predPx, 0, PATCH_160, 0, 0, PATCH_160, PATCH_160)
+        val cropPx = IntArray(CROP_168 * CROP_168)
+        crop168.getPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
+        val edge = 6
+        for (y in 0 until PATCH_160) {
+            for (x in 0 until PATCH_160) {
+                val cropIdx = (y + 4) * CROP_168 + (x + 4)
+                val orig = cropPx[cropIdx]
+                val pred = predPx[y * PATCH_160 + x]
+                val blendRight = x >= PATCH_160 - edge
+                val blendBottom = y >= PATCH_160 - edge
+                cropPx[cropIdx] = if (!blendRight && !blendBottom) {
+                    pred
+                } else {
+                    val alpha = when {
+                        blendRight && blendBottom -> (minOf(PATCH_160 - 1 - x, PATCH_160 - 1 - y) * 255 / edge).coerceIn(0, 255)
+                        blendRight -> ((PATCH_160 - 1 - x) * 255 / edge).coerceIn(0, 255)
+                        else -> ((PATCH_160 - 1 - y) * 255 / edge).coerceIn(0, 255)
+                    }
+                    val r = (Color.red(pred) * alpha + Color.red(orig) * (255 - alpha)) / 255
+                    val g = (Color.green(pred) * alpha + Color.green(orig) * (255 - alpha)) / 255
+                    val b = (Color.blue(pred) * alpha + Color.blue(orig) * (255 - alpha)) / 255
+                    (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+                }
+            }
+        }
+        crop168.setPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
     }
 
     private fun outputToBitmap(output: Array<Array<Array<FloatArray>>>, outputSize: Int): Bitmap {
