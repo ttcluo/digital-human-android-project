@@ -11,11 +11,14 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.graphics.SurfaceTexture
+import android.view.Surface
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.TextureView
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -42,8 +45,8 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         private const val REQ_RECORD_AUDIO = 1001
     }
 
-    // Realtime demo相关字段（骨架实现）
-    private var surfaceView: SurfaceView? = null
+    private var textureView: TextureView? = null
+    @Volatile private var drawSurface: Surface? = null
     @Volatile private var realtimeRunning: Boolean = false
     private var realtimeThread: Thread? = null
     private var audioThread: Thread? = null
@@ -54,6 +57,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     private var wenetFrameCount: Int = 0
     private var wenetFeatSize: Int = 0
     private var refFaceBitmap: Bitmap? = null
+    private var previewPlayer: MediaPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +66,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
         val btn = findViewById<Button>(R.id.btnRunBenchmark)
         val btnRealtime = findViewById<Button>(R.id.btnStartRealtime)
         val txt = findViewById<TextView>(R.id.txtResult)
-        surfaceView = findViewById(R.id.surfaceView)
+        textureView = findViewById(R.id.textureView)
 
         btn.setOnClickListener {
             txt.text = "Running OnDevice U-Net benchmark (FP32)..."
@@ -86,6 +90,10 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             }.start()
         }
 
+        findViewById<Button>(R.id.btnFullInference).setOnClickListener {
+            startActivity(android.content.Intent(this, FullInferenceActivity::class.java))
+        }
+
         btnRealtime.setOnClickListener {
             if (!realtimeRunning) {
                 if (!ensureRecordAudioPermission()) {
@@ -96,6 +104,13 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        realtimeRunning = false
+        previewPlayer?.release()
+        previewPlayer = null
     }
 
     private fun ensureRecordAudioPermission(): Boolean {
@@ -200,19 +215,14 @@ class UnetBenchmarkActivity : AppCompatActivity() {
     }
 
     /**
-     * 端上全链路骨架（音频采集线程 + 特征队列 + U-Net 渲染 SurfaceView）。
-     * 当前实现：
-     * - 使用 AudioRecord 采集 16kHz PCM，推入 audioQueue（暂未真正送入 U-Net，仅作为架构占位）。
-     * - 渲染线程按固定节奏调用 U-Net，使用零特征占位，输出结果渲染到 SurfaceView。
-     * 后续可以在 audioQueue 之上接入轻量音频编码器，将其输出特征送入 U-Net。
+     * 端上全链路：U-Net 推理 + 渲染。使用 TextureView + Surface 绘制（与 SurfaceView 不同的显示管线）。
      */
     private fun startRealtimeDemo() {
-        val holder = surfaceView?.holder ?: run {
-            Log.e(LOG_TAG, "SurfaceView holder is null")
+        val tv = textureView ?: run {
+            Log.e(LOG_TAG, "textureView is null")
             return
         }
 
-        // 预加载伪流式 WeNet 特征（如果存在的话）
         if (wenetFeatFrames == null) {
             try {
                 loadWenetFeatStream(this, "wenet_feat_stream.bin")
@@ -221,27 +231,46 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             }
         }
 
-        val latch = CountDownLatch(1)
-        holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                latch.countDown()
+        previewPlayer?.release()
+        previewPlayer = try {
+            assets.openFd("preview.mp3").use { afd ->
+                MediaPlayer().apply {
+                    setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    prepare()
+                    setOnCompletionListener { mp -> mp.release(); previewPlayer = null }
+                    isLooping = false
+                }
             }
-            override fun surfaceChanged(
-                holder: SurfaceHolder,
-                format: Int,
-                width: Int,
-                height: Int
-            ) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                realtimeRunning = false
-            }
-        })
-        if (holder.surface.isValid) {
-            latch.countDown()
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "preview.mp3 not found, inference without audio", e)
+            null
         }
 
-        realtimeRunning = true
-        realtimeThread = Thread {
+        val surfaceLatch = CountDownLatch(1)
+        tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                drawSurface?.release()
+                drawSurface = Surface(surface)
+                surfaceLatch.countDown()
+            }
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                realtimeRunning = false
+                drawSurface?.release()
+                drawSurface = null
+                return true
+            }
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+        }
+        tv.post {
+            if (tv.isAvailable && tv.surfaceTexture != null) {
+                drawSurface?.release()
+                drawSurface = Surface(tv.surfaceTexture!!)
+                surfaceLatch.countDown()
+            }
+            previewPlayer?.start()
+            realtimeRunning = true
+            realtimeThread = Thread {
             val outH = 128
             val outW = 128
             var env: OrtEnvironment? = null
@@ -282,14 +311,13 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 pixels = IntArray(outW * outH)
                 Log.i(LOG_TAG, "Realtime demo init: outH=$outH, outW=$outW, imgSize=$imgSize, audioSize=$audioSize")
 
-                if (!latch.await(5, TimeUnit.SECONDS)) {
-                    Log.e(LOG_TAG, "Surface not ready within 5s, draw may be black")
-                } else {
-                    Log.i(LOG_TAG, "Surface ready, starting draw loop")
+                if (!surfaceLatch.await(5, TimeUnit.SECONDS)) {
+                    Log.e(LOG_TAG, "TextureView surface not ready within 5s")
                 }
 
                 var audioFrameIndex = 0
                 var frameCounter = 0
+                var lastDisplayedComposed: Bitmap? = null
 
                 while (realtimeRunning) {
                     // 每帧从预生成的 WeNet 特征序列中取出一帧填充 audioInput；如果没有则保持全 0。
@@ -304,6 +332,9 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                         }
                         audioFrameIndex++
                     }
+
+                    audioTensor?.close()
+                    audioTensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(audioInput), audioShape)
 
                     val result = session.run(
                         mapOf(
@@ -326,38 +357,19 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                     ) {
                         Log.w(LOG_TAG, "Output tensor is empty, skip rendering")
                     } else {
-                        // 每隔若干帧打印一次输出范围，确认是否全部为 0 或接近 0
-                        if (frameCounter % 10 == 0) {
-                            var minVal = Float.POSITIVE_INFINITY
-                            var maxVal = Float.NEGATIVE_INFINITY
-                            val c0dbg = output[0][0]
-                            var yDbg = 0
-                            while (yDbg < outH) {
-                                var xDbg = 0
-                                while (xDbg < outW) {
-                                    val v = c0dbg[yDbg][xDbg]
-                                    if (v < minVal) minVal = v
-                                    if (v > maxVal) maxVal = v
-                                    xDbg++
-                                }
-                                yDbg++
-                            }
-                            Log.d(LOG_TAG, "U-Net output[0] range: min=$minVal, max=$maxVal")
-                        }
-
                         val c0 = output[0][0]
                         val c1 = output[0][1]
                         val c2 = output[0][2]
 
-                        // 真实肤色：U-Net 三通道作为 RGB，[0,1] 映射到 0–255
+                        // U-Net 输出通道顺序与训练 target 一致。训练用 BGR，故 c0=B,c1=G,c2=R
                         var idx = 0
                         var y = 0
                         while (y < outH) {
                             var x = 0
                             while (x < outW) {
-                                val r = (c0[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
+                                val b = (c0[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
                                 val g = (c1[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
-                                val b = (c2[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
+                                val r = (c2[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
                                 px[idx++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                                 x++
                             }
@@ -365,7 +377,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                         }
                         bmp.setPixels(px, 0, outW, 0, 0, outW, outH)
 
-                        // 复刻 inference.py：以参考人脸为底图，将预测 patch 贴回中心区域 [margin, margin, outW-margin, outH-margin]
+                        // 复刻 inference.py：以 ref 为底图，将 pred 中心贴回。margin 与 inference 的 [4:164] 比例一致
                         val margin = 4
                         val toDraw: Bitmap = when (val base = refFaceBitmap) {
                             null -> bmp
@@ -378,20 +390,25 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                             }
                         }
 
-                        val canvas = holder.lockCanvas()
-                        if (canvas != null) {
-                            try {
-                                if (frameCounter % 30 == 0) {
-                                    Log.d(LOG_TAG, "canvas size: ${canvas.width} x ${canvas.height}")
+                        val prev = lastDisplayedComposed
+                        lastDisplayedComposed = if (toDraw !== bmp) toDraw else null
+                        val surface = drawSurface
+                        if (surface != null) {
+                            val canvas = if (Build.VERSION.SDK_INT >= 23) {
+                                surface.lockHardwareCanvas()
+                            } else {
+                                surface.lockCanvas(null)
+                            }
+                            if (canvas != null) {
+                                try {
+                                    canvas.drawColor(Color.BLACK)
+                                    canvas.drawBitmap(toDraw, null, Rect(0, 0, canvas.width, canvas.height), null)
+                                } finally {
+                                    surface.unlockCanvasAndPost(canvas)
                                 }
-                                canvas.drawColor(Color.BLACK)
-                                val dest = Rect(0, 0, canvas.width, canvas.height)
-                                canvas.drawBitmap(toDraw, null, dest, null)
-                            } finally {
-                                holder.unlockCanvasAndPost(canvas)
                             }
                         }
-
+                        prev?.recycle()
                         if (!debugFrameSaved) {
                             try {
                                 val outFile = File(filesDir, "unet_debug_frame.png")
@@ -404,10 +421,8 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                             }
                             debugFrameSaved = true
                         }
-                        if (toDraw !== bmp) toDraw.recycle()
                     }
 
-                    Log.d(LOG_TAG, "Realtime inference step done")
                     frameCounter++
                     Thread.sleep(50L)
                 }
@@ -421,6 +436,7 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 stopAudioCapture()
             }
         }.also { it.start() }
+        }
     }
 
     /**

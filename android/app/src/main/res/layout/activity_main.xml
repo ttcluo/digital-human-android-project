@@ -28,6 +28,14 @@
 
     </LinearLayout>
 
+    <Button
+        android:id="@+id/btnFullInference"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="完整推理（生成视频）" />
+
+
     <TextView
         android:id="@+id/txtResult"
         android:layout_width="match_parent"
@@ -35,13 +43,12 @@
         android:layout_marginTop="12dp"
         android:text="Result will appear here" />
 
-    <SurfaceView
-        android:id="@+id/surfaceView"
+    <TextureView
+        android:id="@+id/textureView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="12dp"
-        android:layout_weight="1"
-        android:background="#000000" />
+        android:layout_weight="1" />
 
 </LinearLayout>
 
