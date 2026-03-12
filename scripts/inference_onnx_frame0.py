@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--frame", type=int, default=0, help="帧索引，默认 0")
     parser.add_argument("--raw", action="store_true", help="额外导出原始模型输出 160x160，用于与 Android raw 对比")
     parser.add_argument("--dump_inputs", action="store_true", help="导出 img/audio 输入到 .npy，用于排查预处理差异")
+    parser.add_argument("--dump_output", action="store_true", help="导出模型输出到 .npy，与 Android output 对比")
     args = parser.parse_args()
     out_path = Path(args.out)
 
@@ -154,6 +155,11 @@ def main():
 
     inputs = {input_names[0]: img_concat, input_names[1]: audio_feat}
     pred = session.run(None, inputs)[0]
+
+    if args.dump_output:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(out_path.parent / "debug_output.npy", pred)
+        print(f"已导出输出: debug_output.npy")
 
     pred_raw = pred[0].transpose(1, 2, 0) * 255
     pred_raw = np.clip(pred_raw, 0, 255).astype(np.uint8)

@@ -295,6 +295,9 @@ class FullInferenceActivity : AppCompatActivity() {
             imgTensor.close()
             audioTensor.close()
 
+            if (i == 0) {
+                dumpDebugInputsOutput(getOutputDir(), imgInput, audioInput, output, inputSize)
+            }
             val pred160 = outputToBitmap(output, inputSize)
             if (i == 0) {
                 saveRawPredForDebug(pred160)
@@ -511,6 +514,52 @@ class FullInferenceActivity : AppCompatActivity() {
             }
         }
         crop168.setPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
+    }
+
+    private fun dumpDebugInputsOutput(
+        outDir: File,
+        imgInput: FloatArray,
+        audioInput: FloatArray,
+        output: Array<Array<Array<FloatArray>>>,
+        outputSize: Int
+    ) {
+        try {
+            val bb = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+            FileOutputStream(File(outDir, "android_debug_img_input.bin")).use { fos ->
+                val fc = fos.channel
+                for (i in imgInput.indices) {
+                    bb.clear()
+                    bb.putFloat(imgInput[i])
+                    bb.flip()
+                    fc.write(bb)
+                }
+            }
+            FileOutputStream(File(outDir, "android_debug_audio_input.bin")).use { fos ->
+                val fc = fos.channel
+                for (i in audioInput.indices) {
+                    bb.clear()
+                    bb.putFloat(audioInput[i])
+                    bb.flip()
+                    fc.write(bb)
+                }
+            }
+            FileOutputStream(File(outDir, "android_debug_output.bin")).use { fos ->
+                val fc = fos.channel
+                for (c in 0..2) {
+                    for (y in 0 until outputSize) {
+                        for (x in 0 until outputSize) {
+                            bb.clear()
+                            bb.putFloat(output[0][c][y][x])
+                            bb.flip()
+                            fc.write(bb)
+                        }
+                    }
+                }
+            }
+            Log.i(LOG_TAG, "Debug dump: android_debug_*.bin, adb pull 与 server 对比")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "dumpDebugInputsOutput failed", e)
+        }
     }
 
     private fun saveRawPredForDebug(pred160: Bitmap) {
