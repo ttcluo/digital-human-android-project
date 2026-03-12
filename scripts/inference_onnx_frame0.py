@@ -125,7 +125,8 @@ def main():
 
     crop_img = img[ymin:ymax, xmin:xmax]
     h, w = crop_img.shape[:2]
-    crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_AREA)
+    # 与 Android createScaledBitmap(filter=true) 双线性插值一致
+    crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_LINEAR)
     crop_img_ori = crop_img.copy()
 
     img_real_ex = crop_img[4:164, 4:164].copy()
