@@ -265,6 +265,9 @@ class FullInferenceActivity : AppCompatActivity() {
             val cropBmp = Bitmap.createBitmap(fullImg, xmin, ymin, cropW, cropH)
             val crop168 = Bitmap.createScaledBitmap(cropBmp, CROP_168, CROP_168, true)
             cropBmp.recycle()
+            if (i == 0) {
+                saveCrop168ForDebug(getOutputDir(), crop168)
+            }
 
             val patch160 = Bitmap.createBitmap(crop168, 4, 4, PATCH_160, PATCH_160)
             val masked160 = patch160.copy(Bitmap.Config.ARGB_8888, true)
@@ -520,6 +523,17 @@ class FullInferenceActivity : AppCompatActivity() {
             }
         }
         crop168.setPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
+    }
+
+    private fun saveCrop168ForDebug(outDir: File, crop168: Bitmap) {
+        try {
+            FileOutputStream(File(outDir, "android_crop168.png")).use { fos ->
+                crop168.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+            Log.i(LOG_TAG, "Crop168 saved: android_crop168.png (服务器 --use_crop 可加载)")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "saveCrop168ForDebug failed", e)
+        }
     }
 
     private fun savePatchForDebug(outDir: File, patch160: Bitmap, masked160: Bitmap) {

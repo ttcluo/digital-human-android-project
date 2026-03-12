@@ -10,6 +10,10 @@
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_debug_output.bin data/
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_patch_real.png data/
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_patch_masked.png data/
+     adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_crop168.png data/
+
+  3b. 用 Android crop 跑服务器（排除 decode+resize）:
+     python scripts/inference_onnx_frame0.py ... --use_crop data/android_crop168.png --dump_inputs --dump_output
 
   3. 对比:
      python scripts/compare_android_server_inputs.py --data_dir data

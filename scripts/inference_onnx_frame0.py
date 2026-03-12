@@ -64,6 +64,8 @@ def main():
     parser.add_argument("--raw", action="store_true", help="额外导出原始模型输出 160x160，用于与 Android raw 对比")
     parser.add_argument("--dump_inputs", action="store_true", help="导出 img/audio 输入到 .npy，用于排查预处理差异")
     parser.add_argument("--dump_output", action="store_true", help="导出模型输出到 .npy，与 Android output 对比")
+    parser.add_argument("--decoder", choices=["cv2", "pil"], default="cv2", help="JPEG 解码器，pil 更接近 Android BitmapFactory")
+    parser.add_argument("--use_crop", help="直接使用 Android 导出的 android_crop168.png，跳过 decode+crop+resize")
     args = parser.parse_args()
     out_path = Path(args.out)
 
@@ -111,22 +113,41 @@ def main():
 
     img_path = img_dir / f"{img_idx}.jpg"
     lms_path = lms_dir / f"{img_idx}.lms"
-    if not img_path.exists() or not lms_path.exists():
-        print(f"错误: 未找到 {img_path} 或 {lms_path}")
-        sys.exit(1)
 
-    img = cv2.imread(str(img_path))
-    lms = parse_landmarks(str(lms_path))
-    xmin = int(lms[1][0])
-    ymin = int(lms[52][1])
-    xmax = int(lms[31][0])
-    width = xmax - xmin
-    ymax = ymin + width
-
-    crop_img = img[ymin:ymax, xmin:xmax]
-    h, w = crop_img.shape[:2]
-    # 与 Android createScaledBitmap(filter=true) 双线性插值一致
-    crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_LINEAR)
+    if args.use_crop:
+        crop_path = Path(args.use_crop)
+        if not crop_path.exists():
+            print(f"错误: --use_crop 文件不存在: {crop_path}")
+            sys.exit(1)
+        crop_img = cv2.imread(str(crop_path))
+        if crop_img is None or crop_img.shape[0] != 168 or crop_img.shape[1] != 168:
+            print(f"错误: crop 需为 168x168，实际 {crop_img.shape if crop_img is not None else None}")
+            sys.exit(1)
+        # Android Bitmap 保存 PNG 为 RGB，cv2 读入为 BGR，需转回 BGR 以匹配模型输入
+        crop_img = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
+        h, w = 168, 168
+        print(f"使用 Android crop: {crop_path}")
+    else:
+        if not img_path.exists() or not lms_path.exists():
+            print(f"错误: 未找到 {img_path} 或 {lms_path}")
+            sys.exit(1)
+        if args.decoder == "pil":
+            from PIL import Image
+            pil_img = Image.open(str(img_path))
+            if pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+            img = np.array(pil_img)[:, :, ::-1].copy()  # RGB -> BGR
+        else:
+            img = cv2.imread(str(img_path))
+        lms = parse_landmarks(str(lms_path))
+        xmin = int(lms[1][0])
+        ymin = int(lms[52][1])
+        xmax = int(lms[31][0])
+        width = xmax - xmin
+        ymax = ymin + width
+        crop_img = img[ymin:ymax, xmin:xmax]
+        h, w = crop_img.shape[:2]
+        crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_LINEAR)
     crop_img_ori = crop_img.copy()
 
     img_real_ex = crop_img[4:164, 4:164].copy()
