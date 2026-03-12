@@ -45,6 +45,33 @@
         android:textSize="11sp"
         android:textColor="#999999" />
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="模型选择（对比画质）"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <RadioGroup
+        android:id="@+id/radioModel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical">
+        <RadioButton
+            android:id="@+id/radioOnDevice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OnDevice 128（轻量，画质糊）" />
+        <RadioButton
+            android:id="@+id/radioUltralight"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="Ultralight 160（原始，画质好，需 unet_wenet_160.onnx）" />
+    </RadioGroup>
+
     <Button
         android:id="@+id/btnRunInference"
         android:layout_width="match_parent"

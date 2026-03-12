@@ -21,4 +21,4 @@ captures/
 .vscode/
 .DS_Store
 *.bin
-/app/src/main/assets/*.mp3
+/app/src/main/assets/

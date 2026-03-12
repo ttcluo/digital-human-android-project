@@ -20,6 +20,7 @@ import android.os.Environment
 import android.util.Log
 import android.widget.Button
 import android.widget.ProgressBar
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -75,27 +76,66 @@ class FullInferenceActivity : AppCompatActivity() {
         txtOutputPath = findViewById(R.id.txtOutputPath)
         progressBar = findViewById(R.id.progressBar)
 
+        initDefaultAudio()
+
         btnSelectAudio.setOnClickListener {
             if (ensureStoragePermission()) {
-                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "audio/*"
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "audio/*"
                 }
-                startActivityForResult(Intent.createChooser(intent, "选择音频"), REQ_STORAGE)
+                try {
+                    startActivityForResult(Intent.createChooser(intent, "选择音频"), REQ_STORAGE)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "无法打开文件选择器: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                txtAudioPath.text = "默认: preview.mp3（需存储权限才能选择其他文件）"
             }
         }
 
         btnRunInference.setOnClickListener {
-            if (running.get()) return
-            runFullInference()
+            if (running.get()) return@setOnClickListener
+            val useUltralight160 = findViewById<RadioGroup>(R.id.radioModel).checkedRadioButtonId == R.id.radioUltralight
+            runFullInference(useUltralight160)
         }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_STORAGE && resultCode == RESULT_OK && data?.data != null) {
-            selectedAudioPath = data.data?.path
-            txtAudioPath.text = selectedAudioPath ?: "未选择"
+            val uri = data.data!!
+            selectedAudioPath = copyUriToCache(uri, "selected_audio.mp3")?.absolutePath
+            txtAudioPath.text = selectedAudioPath ?: "已选择（见上方）"
+        }
+    }
+
+    private fun initDefaultAudio() {
+        try {
+            val outFile = File(cacheDir, "preview.mp3")
+            if (!outFile.exists()) {
+                assets.open("preview.mp3").use { input ->
+                    FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                }
+            }
+            selectedAudioPath = outFile.absolutePath
+            txtAudioPath.text = "默认: preview.mp3"
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "preview.mp3 not in assets, using null", e)
+            txtAudioPath.text = "未找到 preview.mp3，推理将输出无声视频"
+        }
+    }
+
+    private fun copyUriToCache(uri: android.net.Uri, fileName: String): File? {
+        return try {
+            val outFile = File(cacheDir, fileName)
+            contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(outFile).use { output -> input.copyTo(output) }
+            }
+            outFile
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "copyUriToCache failed", e)
+            null
         }
     }
 
@@ -112,7 +152,7 @@ class FullInferenceActivity : AppCompatActivity() {
         return granted
     }
 
-    private fun runFullInference() {
+    private fun runFullInference(useUltralight160: Boolean = false) {
         running.set(true)
         btnRunInference.isEnabled = false
         progressBar.visibility = ProgressBar.VISIBLE
@@ -121,10 +161,11 @@ class FullInferenceActivity : AppCompatActivity() {
         txtProgress.text = "准备中..."
         txtOutputPath.text = ""
 
+        val suffix = if (useUltralight160) "ultralight" else "ondevice"
         Thread {
             try {
-                val outFile = File(getOutputDir(), "full_inference_${System.currentTimeMillis()}.mp4")
-                runInferencePipeline(outFile)
+                val outFile = File(getOutputDir(), "full_inference_${suffix}_${System.currentTimeMillis()}.mp4")
+                runInferencePipeline(outFile, useUltralight160)
                 runOnUiThread {
                     txtProgress.text = "完成"
                     txtOutputPath.text = outFile.absolutePath
@@ -156,7 +197,7 @@ class FullInferenceActivity : AppCompatActivity() {
         return dir
     }
 
-    private fun runInferencePipeline(outFile: File) {
+    private fun runInferencePipeline(outFile: File, useUltralight160: Boolean = false) {
         val datasetDir = File(filesDir, "dataset").apply { mkdirs() }
         copyAssetsDataset(datasetDir)
 
@@ -173,18 +214,23 @@ class FullInferenceActivity : AppCompatActivity() {
         if (lenImg == 0) throw IllegalStateException("dataset 无图片")
 
         val exmPath = imgFiles[0].absolutePath
-        val exmBmp = BitmapFactory.decodeFile(exmPath)
+        val exmBmp = decodeImageFile(exmPath)
             ?: throw IllegalStateException("无法读取示例图: $exmPath")
         val outW = exmBmp.width
         val outH = exmBmp.height
         exmBmp.recycle()
 
         val env = OrtEnvironment.getEnvironment()
-        val modelFile = copyAssetToCache(this, "unet_ondevice_128.onnx")
+        val (modelAsset, inputSize) = if (useUltralight160) {
+            "unet_wenet_160.onnx" to 160
+        } else {
+            "unet_ondevice_128.onnx" to 128
+        }
+        val modelFile = copyAssetToCache(this, modelAsset)
         val session = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
         val inputNames = session.inputNames.toList()
 
-        val imgShape = longArrayOf(1, 6, UNET_INPUT_SIZE.toLong(), UNET_INPUT_SIZE.toLong())
+        val imgShape = longArrayOf(1, 6, inputSize.toLong(), inputSize.toLong())
         val audioShape = longArrayOf(1, 128, 16, 32)
         val audioInput = FloatArray(audioShape.reduce { a, v -> a * v }.toInt())
 
@@ -204,7 +250,7 @@ class FullInferenceActivity : AppCompatActivity() {
             val imgPath = imgFiles[frameIdx].absolutePath
             val lmsPath = File(lmsDir, "${imgFiles[frameIdx].nameWithoutExtension}.lms").absolutePath
 
-            val fullImg = BitmapFactory.decodeFile(imgPath)
+            val fullImg = decodeImageFile(imgPath)
                 ?: throw IllegalStateException("无法读取: $imgPath")
             val lms = parseLandmarks(lmsPath)
             var (xmin, ymin, xmax, ymax) = getCropRect(lms)
@@ -227,8 +273,8 @@ class FullInferenceActivity : AppCompatActivity() {
                 Paint().apply { color = Color.BLACK }
             )
 
-            val imgInput = FloatArray(6 * UNET_INPUT_SIZE * UNET_INPUT_SIZE)
-            fillSixChannelInput(patch160, masked160, imgInput)
+            val imgInput = FloatArray(6 * inputSize * inputSize)
+            fillSixChannelInput(patch160, masked160, imgInput, inputSize)
             patch160.recycle()
             masked160.recycle()
 
@@ -249,10 +295,11 @@ class FullInferenceActivity : AppCompatActivity() {
             imgTensor.close()
             audioTensor.close()
 
-            val pred160 = outputToBitmap160(output)
+            val pred160 = outputToBitmap(output, inputSize)
             val crop168Out = crop168.copy(Bitmap.Config.ARGB_8888, true)
             val canvas = Canvas(crop168Out)
-            canvas.drawBitmap(pred160, null, Rect(4, 4, 164, 164), null)
+            val noFilterPaint = Paint().apply { isFilterBitmap = false }
+            canvas.drawBitmap(pred160, null, Rect(4, 4, 164, 164), noFilterPaint)
             pred160.recycle()
 
             val cropResized = Bitmap.createScaledBitmap(crop168Out, cropW, cropH, true)
@@ -264,6 +311,14 @@ class FullInferenceActivity : AppCompatActivity() {
             cropResized.recycle()
             fullImg.recycle()
 
+            if (i == 0) {
+                try {
+                    FileOutputStream(File(filesDir, "full_inference_frame0_debug.png")).use { fos ->
+                        outBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                    }
+                    Log.i(LOG_TAG, "Debug frame saved: ${filesDir}/full_inference_frame0_debug.png")
+                } catch (e: Exception) { Log.e(LOG_TAG, "Save debug frame failed", e) }
+            }
             videoEncoder.encodeFrame(outBmp)
             outBmp.recycle()
 
@@ -297,6 +352,15 @@ class FullInferenceActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w(LOG_TAG, "copyAssetsDataset: ${e.message}")
         }
+    }
+
+    private fun decodeImageFile(path: String): Bitmap? {
+        val opts = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inScaled = false
+            inDither = false
+        }
+        return BitmapFactory.decodeFile(path, opts)
     }
 
     private fun copyAssetToCache(context: Context, assetName: String): File {
@@ -355,15 +419,15 @@ class FullInferenceActivity : AppCompatActivity() {
         return intArrayOf(xmin, ymin, xmax, ymax)
     }
 
-    private fun fillSixChannelInput(real: Bitmap, masked: Bitmap, out: FloatArray) {
-        val real128 = Bitmap.createScaledBitmap(real, UNET_INPUT_SIZE, UNET_INPUT_SIZE, true)
-        val masked128 = Bitmap.createScaledBitmap(masked, UNET_INPUT_SIZE, UNET_INPUT_SIZE, true)
-        val hw = UNET_INPUT_SIZE * UNET_INPUT_SIZE
-        for (y in 0 until UNET_INPUT_SIZE) {
-            for (x in 0 until UNET_INPUT_SIZE) {
-                val idx = y * UNET_INPUT_SIZE + x
-                val cReal = real128.getPixel(x, y)
-                val cMask = masked128.getPixel(x, y)
+    private fun fillSixChannelInput(real: Bitmap, masked: Bitmap, out: FloatArray, inputSize: Int) {
+        val realScaled = Bitmap.createScaledBitmap(real, inputSize, inputSize, true)
+        val maskedScaled = Bitmap.createScaledBitmap(masked, inputSize, inputSize, true)
+        val hw = inputSize * inputSize
+        for (y in 0 until inputSize) {
+            for (x in 0 until inputSize) {
+                val idx = y * inputSize + x
+                val cReal = realScaled.getPixel(x, y)
+                val cMask = maskedScaled.getPixel(x, y)
                 out[0 * hw + idx] = Color.blue(cReal) / 255f
                 out[1 * hw + idx] = Color.green(cReal) / 255f
                 out[2 * hw + idx] = Color.red(cReal) / 255f
@@ -372,28 +436,63 @@ class FullInferenceActivity : AppCompatActivity() {
                 out[5 * hw + idx] = Color.red(cMask) / 255f
             }
         }
-        real128.recycle()
-        masked128.recycle()
+        realScaled.recycle()
+        maskedScaled.recycle()
     }
 
-    private fun outputToBitmap160(output: Array<Array<Array<FloatArray>>>): Bitmap {
+    /**
+     * 将 pred 与原始图在边缘融合，消除方形马赛克边界感。
+     * margin 像素内线性混合：中心 100% pred，边缘 100% 原图。
+     */
+    private fun blendPredWithOriginal(
+        crop168: Bitmap,
+        pred160: Bitmap,
+        ox: Int,
+        oy: Int,
+        w: Int,
+        h: Int
+    ): Bitmap {
+        val margin = 12
+        val orig160 = Bitmap.createBitmap(crop168, ox, oy, w, h)
+        val predPx = IntArray(w * h)
+        val origPx = IntArray(w * h)
+        pred160.getPixels(predPx, 0, w, 0, 0, w, h)
+        orig160.getPixels(origPx, 0, w, 0, 0, w, h)
+        orig160.recycle()
+        val outPx = IntArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val d = minOf(x, y, w - 1 - x, h - 1 - y)
+                val alpha = if (d >= margin) 255 else (d * 255 / margin).coerceAtLeast(0)
+                val p = predPx[y * w + x]
+                val o = origPx[y * w + x]
+                val r = (Color.red(p) * alpha + Color.red(o) * (255 - alpha)) / 255
+                val g = (Color.green(p) * alpha + Color.green(o) * (255 - alpha)) / 255
+                val b = (Color.blue(p) * alpha + Color.blue(o) * (255 - alpha)) / 255
+                outPx[y * w + x] = (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+            }
+        }
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        result.setPixels(outPx, 0, w, 0, 0, w, h)
+        return result
+    }
+
+    private fun outputToBitmap(output: Array<Array<Array<FloatArray>>>, outputSize: Int): Bitmap {
         val c0 = output[0][0]
         val c1 = output[0][1]
         val c2 = output[0][2]
-        val px = IntArray(UNET_INPUT_SIZE * UNET_INPUT_SIZE)
-        for (y in 0 until UNET_INPUT_SIZE) {
-            for (x in 0 until UNET_INPUT_SIZE) {
+        val px = IntArray(outputSize * outputSize)
+        for (y in 0 until outputSize) {
+            for (x in 0 until outputSize) {
                 val b = (c0[y][x].coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
                 val g = (c1[y][x].coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
                 val r = (c2[y][x].coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
-                px[y * UNET_INPUT_SIZE + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                px[y * outputSize + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
         }
-        val bmp128 = Bitmap.createBitmap(UNET_INPUT_SIZE, UNET_INPUT_SIZE, Bitmap.Config.ARGB_8888)
-        bmp128.setPixels(px, 0, UNET_INPUT_SIZE, 0, 0, UNET_INPUT_SIZE, UNET_INPUT_SIZE)
-        val scaled = Bitmap.createScaledBitmap(bmp128, PATCH_160, PATCH_160, true)
-        bmp128.recycle()
-        return scaled
+        val bmp = Bitmap.createBitmap(outputSize, outputSize, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(px, 0, outputSize, 0, 0, outputSize, outputSize)
+        return if (outputSize == PATCH_160) bmp else Bitmap.createScaledBitmap(bmp, PATCH_160, PATCH_160, true).also { bmp.recycle() }
     }
 
     private class VideoEncoder(
@@ -408,11 +507,13 @@ class FullInferenceActivity : AppCompatActivity() {
         private var frameCount = 0L
 
         fun start(outputPath: String) {
+            // 服务端用 MJPEG（每帧独立 JPEG），画质好；端上 H264 有块效应。提高码率减轻方框感
+            val bitrate = (width * height * 8).coerceAtLeast(8_000_000)
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar)
-                setInteger(MediaFormat.KEY_BIT_RATE, width * height * 4)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-                setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 1f)
+                setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 0.5f)
             }
             codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
                 configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -455,7 +556,11 @@ class FullInferenceActivity : AppCompatActivity() {
             val c = codec ?: return
             val bufferInfo = MediaCodec.BufferInfo()
             try {
-                c.signalEndOfInputStream()
+                try {
+                    c.signalEndOfInputStream()
+                } catch (e: IllegalStateException) {
+                    Log.w(LOG_TAG, "signalEndOfInputStream ignored (MTK/device quirk): ${e.message}")
+                }
                 while (true) {
                     val idx = c.dequeueOutputBuffer(bufferInfo, 10000)
                     when {
