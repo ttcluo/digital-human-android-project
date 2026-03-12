@@ -91,6 +91,7 @@ def main():
         print("提示: 无 debug_img_input.npy，运行 inference_onnx_frame0.py --dump_inputs")
 
     _compare_patch_pngs(data_dir)
+    _verify_img_from_patch(data_dir)
 
     # 对比 audio
     if server_audio.exists():
@@ -113,6 +114,32 @@ def main():
             compare("output", s_out, a_out)
         else:
             print(f"\noutput: Android 已 dump (shape [3,{out_size},{out_size}])，服务器加 --dump_output 后可对比")
+
+
+def _verify_img_from_patch(data_dir: Path) -> None:
+    """若 patch real 一致，从 server patch 重建 img 与 server npy 对比，验证 mask 逻辑。"""
+    s_real = data_dir / "debug_patch_real.png"
+    s_img = data_dir / "debug_img_input.npy"
+    if not s_real.exists() or not s_img.exists():
+        return
+    try:
+        import cv2
+        patch = cv2.imread(str(s_real))
+        if patch is None or patch.shape != (160, 160, 3):
+            return
+        # 重建：real = patch/255, masked = mask 内 0、外 patch/255
+        real = patch.astype(np.float32) / 255.0
+        masked = real.copy()
+        masked[5:146, 5:151] = 0  # mask 内涂黑，与 cv2.rectangle(5,5)-(150,145) inclusive 一致
+        rebuilt = np.concatenate([real.transpose(2, 0, 1), masked.transpose(2, 0, 1)], axis=0)[np.newaxis, ...]
+        server = np.load(s_img)
+        diff = np.abs(rebuilt.astype(np.float64) - server.astype(np.float64))
+        print(f"\n=== 从 patch 重建 vs server npy (验证 mask) ===")
+        print(f"  max_diff={diff.max():.6f}, mean_diff={diff.mean():.6f}")
+        if diff.max() < 1e-5:
+            print("  mask 逻辑一致")
+    except Exception:
+        pass
 
 
 def _compare_patch_pngs(data_dir: Path) -> None:
