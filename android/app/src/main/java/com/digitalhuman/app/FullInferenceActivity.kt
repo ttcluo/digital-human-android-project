@@ -296,6 +296,9 @@ class FullInferenceActivity : AppCompatActivity() {
             audioTensor.close()
 
             val pred160 = outputToBitmap(output, inputSize)
+            if (i == 0) {
+                saveRawPredForDebug(pred160)
+            }
             val crop168Out = crop168.copy(Bitmap.Config.ARGB_8888, true)
             pastePredToCrop168(crop168Out, pred160)
             pred160.recycle()
@@ -311,10 +314,11 @@ class FullInferenceActivity : AppCompatActivity() {
 
             if (i == 0) {
                 try {
-                    FileOutputStream(File(filesDir, "full_inference_frame0_debug.png")).use { fos ->
+                    val debugDir = getOutputDir()
+                    FileOutputStream(File(debugDir, "full_inference_frame0_debug.png")).use { fos ->
                         outBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
                     }
-                    Log.i(LOG_TAG, "Debug frame saved: ${filesDir}/full_inference_frame0_debug.png")
+                    Log.i(LOG_TAG, "Debug frame saved: ${debugDir}/full_inference_frame0_debug.png")
                 } catch (e: Exception) { Log.e(LOG_TAG, "Save debug frame failed", e) }
             }
             videoEncoder.encodeFrame(outBmp)
@@ -507,6 +511,18 @@ class FullInferenceActivity : AppCompatActivity() {
             }
         }
         crop168.setPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
+    }
+
+    private fun saveRawPredForDebug(pred160: Bitmap) {
+        try {
+            val outDir = getOutputDir()
+            FileOutputStream(File(outDir, "android_raw_frame0.png")).use { fos ->
+                pred160.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+            Log.i(LOG_TAG, "Raw pred saved: ${outDir}/android_raw_frame0.png (adb pull 对比)")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Save raw pred failed", e)
+        }
     }
 
     private fun outputToBitmap(output: Array<Array<Array<FloatArray>>>, outputSize: Int): Bitmap {

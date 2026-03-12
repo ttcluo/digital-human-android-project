@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
 服务器端用 ONNX 推理并导出第 0 帧，与 Android 端对比以隔离 PyTorch vs ONNX 差异。
-用法:
-  python scripts/inference_onnx_frame0.py \
-    --dataset data/raw \
-    --audio_feat data/preview_wenet.npy \
-    --onnx android/app/src/main/assets/unet_wenet_160.onnx \
-    -o data/server_onnx_frame0.png
+
+排查 Android 画质差异流程:
+  1. 服务器导出 raw 输出:
+     python scripts/inference_onnx_frame0.py --dataset data/raw --audio_bin android/app/src/main/assets/wenet_feat_stream.bin --onnx android/app/src/main/assets/unet_wenet_160.onnx -o data/server_onnx_frame0.png --raw
+
+  2. Android 运行 FullInference（选 Ultralight 160），用 adb pull 拉取 android_raw_frame0.png:
+     adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_raw_frame0.png data/
+
+  3. 对比 raw 输出（排除贴回差异）:
+     python scripts/compare_inference_quality.py --server data/server_onnx_frame0_raw.png --android data/android_raw_frame0.png
+
+  4. 若 raw 仍差异大，用 --dump_inputs 导出输入，排查预处理
 """
 
 import argparse
@@ -50,11 +56,15 @@ def parse_landmarks(lms_path: str) -> np.ndarray:
 def main():
     parser = argparse.ArgumentParser(description="服务器端 ONNX 推理，导出第 0 帧")
     parser.add_argument("--dataset", required=True, help="dataset 目录，含 full_body_img/ 和 landmarks/")
-    parser.add_argument("--audio_feat", required=True, help="*_wenet.npy 路径")
+    parser.add_argument("--audio_feat", help="*_wenet.npy 路径")
+    parser.add_argument("--audio_bin", help="wenet_feat_stream.bin 路径，与 Android 完全一致时用")
     parser.add_argument("--onnx", required=True, help="ONNX 模型路径，如 unet_wenet_160.onnx")
     parser.add_argument("-o", "--out", default="server_onnx_frame0.png", help="输出 PNG 路径")
     parser.add_argument("--frame", type=int, default=0, help="帧索引，默认 0")
+    parser.add_argument("--raw", action="store_true", help="额外导出原始模型输出 160x160，用于与 Android raw 对比")
+    parser.add_argument("--dump_inputs", action="store_true", help="导出 img/audio 输入到 .npy，用于排查预处理差异")
     args = parser.parse_args()
+    out_path = Path(args.out)
 
     try:
         import onnxruntime as ort
@@ -74,7 +84,21 @@ def main():
         print(f"错误: ONNX 模型不存在: {onnx_path}")
         sys.exit(1)
 
-    feats = np.load(args.audio_feat).astype(np.float32)
+    if args.audio_bin:
+        with open(args.audio_bin, "rb") as f:
+            header = np.fromfile(f, dtype=np.int32, count=4)
+            T, C, H, W = header.tolist()
+            frame_size = C * H * W
+            if args.frame >= T:
+                raise RuntimeError(f"bin 帧数不足: T={T}, 需要帧 {args.frame}")
+            f.seek(16 + args.frame * frame_size * 4)
+            data = np.fromfile(f, dtype=np.float32, count=frame_size)
+            audio_feat = data.reshape(1, C, H, W).astype(np.float32)
+    else:
+        if not args.audio_feat:
+            print("错误: 需指定 --audio_feat 或 --audio_bin")
+            sys.exit(1)
+        feats = np.load(args.audio_feat).astype(np.float32)
     session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     input_names = [inp.name for inp in session.get_inputs()]
     img_shape = session.get_inputs()[0].shape
@@ -119,21 +143,34 @@ def main():
             )
         img_concat = resized
 
-    audio_feat = get_audio_features(feats, i)[np.newaxis, ...]
+    if not args.audio_bin:
+        audio_feat = get_audio_features(feats, i)[np.newaxis, ...]
+
+    if args.dump_inputs:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(out_path.parent / "debug_img_input.npy", img_concat)
+        np.save(out_path.parent / "debug_audio_input.npy", audio_feat)
+        print(f"已导出输入: debug_img_input.npy, debug_audio_input.npy")
 
     inputs = {input_names[0]: img_concat, input_names[1]: audio_feat}
     pred = session.run(None, inputs)[0]
 
-    pred = pred[0].transpose(1, 2, 0) * 255
-    pred = np.clip(pred, 0, 255).astype(np.uint8)
-    if pred.shape[0] != 160:
-        pred = cv2.resize(pred, (160, 160), interpolation=cv2.INTER_LINEAR)
+    pred_raw = pred[0].transpose(1, 2, 0) * 255
+    pred_raw = np.clip(pred_raw, 0, 255).astype(np.uint8)
+    if pred_raw.shape[0] != 160:
+        pred_raw = cv2.resize(pred_raw, (160, 160), interpolation=cv2.INTER_LINEAR)
+    pred = pred_raw
+
+    if args.raw:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path = out_path.parent / (out_path.stem + "_raw.png")
+        cv2.imwrite(str(raw_path), pred_raw)
+        print(f"已保存 raw 输出: {raw_path}")
 
     crop_img_ori[4:164, 4:164] = pred
     crop_img_ori = cv2.resize(crop_img_ori, (w, h))
     img[ymin:ymax, xmin:xmax] = crop_img_ori
 
-    out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), img)
     print(f"已保存: {out_path}")
