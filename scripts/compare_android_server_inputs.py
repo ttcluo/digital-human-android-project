@@ -129,6 +129,8 @@ def _compare_patch_pngs(data_dir: Path) -> None:
         ar = cv2.imread(str(a_real))
         if sr is None or ar is None:
             return
+        # Android Bitmap 存 PNG 为 RGB，cv2 读入后 ch0=R ch2=B，转为 BGR 便于与 server 对比
+        ar = ar[:, :, [2, 1, 0]].copy()
         if sr.shape != ar.shape:
             print(f"\n=== patch real PNG 尺寸不一致: {sr.shape} vs {ar.shape}")
             return
@@ -142,6 +144,8 @@ def _compare_patch_pngs(data_dir: Path) -> None:
         if s_masked.exists() and a_masked.exists():
             sm = cv2.imread(str(s_masked))
             am = cv2.imread(str(a_masked))
+            if am is not None:
+                am = am[:, :, [2, 1, 0]].copy()
             if sm is not None and am is not None and sm.shape == am.shape:
                 diff_m = np.abs(sm.astype(np.float64) - am.astype(np.float64))
                 print(f"\n=== patch masked PNG 对比 ===")
