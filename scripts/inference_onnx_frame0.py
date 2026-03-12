@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""
+服务器端用 ONNX 推理并导出第 0 帧，与 Android 端对比以隔离 PyTorch vs ONNX 差异。
+用法:
+  python scripts/inference_onnx_frame0.py \
+    --dataset data/raw \
+    --audio_feat data/preview_wenet.npy \
+    --onnx android/app/src/main/assets/unet_wenet_160.onnx \
+    -o data/server_onnx_frame0.png
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+def get_audio_features(features: np.ndarray, index: int) -> np.ndarray:
+    """与 inference.py / export_wenet_feat_for_android.py 一致。"""
+    left = index - 4
+    right = index + 4
+    pad_left = 0
+    pad_right = 0
+    if left < 0:
+        pad_left = -left
+        left = 0
+    if right > features.shape[0]:
+        pad_right = right - features.shape[0]
+        right = features.shape[0]
+    auds = features[left:right].copy()
+    if pad_left > 0:
+        auds = np.concatenate([np.zeros_like(auds[:pad_left]), auds], axis=0)
+    if pad_right > 0:
+        auds = np.concatenate([auds, np.zeros_like(auds[:pad_right])], axis=0)
+    return auds.reshape(128, 16, 32).astype(np.float32)
+
+
+def parse_landmarks(lms_path: str) -> np.ndarray:
+    pts = []
+    with open(lms_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                pts.append([float(parts[0]), float(parts[1])])
+    return np.array(pts, dtype=np.float32)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="服务器端 ONNX 推理，导出第 0 帧")
+    parser.add_argument("--dataset", required=True, help="dataset 目录，含 full_body_img/ 和 landmarks/")
+    parser.add_argument("--audio_feat", required=True, help="*_wenet.npy 路径")
+    parser.add_argument("--onnx", required=True, help="ONNX 模型路径，如 unet_wenet_160.onnx")
+    parser.add_argument("-o", "--out", default="server_onnx_frame0.png", help="输出 PNG 路径")
+    parser.add_argument("--frame", type=int, default=0, help="帧索引，默认 0")
+    args = parser.parse_args()
+
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        print("错误: 需要 onnxruntime，安装: pip install onnxruntime")
+        sys.exit(1)
+
+    dataset = Path(args.dataset)
+    img_dir = dataset / "full_body_img"
+    lms_dir = dataset / "landmarks"
+    if not img_dir.exists() or not lms_dir.exists():
+        print(f"错误: dataset 需包含 full_body_img/ 和 landmarks/")
+        sys.exit(1)
+
+    onnx_path = Path(args.onnx)
+    if not onnx_path.exists():
+        print(f"错误: ONNX 模型不存在: {onnx_path}")
+        sys.exit(1)
+
+    feats = np.load(args.audio_feat).astype(np.float32)
+    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    input_names = [inp.name for inp in session.get_inputs()]
+    img_shape = session.get_inputs()[0].shape
+    input_size = int(img_shape[2]) if len(img_shape) >= 4 else 160
+
+    i = args.frame
+    img_idx = min(i, len(list(img_dir.glob("*.jpg"))) - 1)
+    img_idx = max(0, img_idx)
+
+    img_path = img_dir / f"{img_idx}.jpg"
+    lms_path = lms_dir / f"{img_idx}.lms"
+    if not img_path.exists() or not lms_path.exists():
+        print(f"错误: 未找到 {img_path} 或 {lms_path}")
+        sys.exit(1)
+
+    img = cv2.imread(str(img_path))
+    lms = parse_landmarks(str(lms_path))
+    xmin = int(lms[1][0])
+    ymin = int(lms[52][1])
+    xmax = int(lms[31][0])
+    width = xmax - xmin
+    ymax = ymin + width
+
+    crop_img = img[ymin:ymax, xmin:xmax]
+    h, w = crop_img.shape[:2]
+    crop_img = cv2.resize(crop_img, (168, 168), interpolation=cv2.INTER_AREA)
+    crop_img_ori = crop_img.copy()
+
+    img_real_ex = crop_img[4:164, 4:164].copy()
+    img_real_ex_ori = img_real_ex.copy()
+    img_masked = cv2.rectangle(img_real_ex_ori.copy(), (5, 5, 150, 145), (0, 0, 0), -1)
+
+    img_real_ex = img_real_ex.transpose(2, 0, 1).astype(np.float32) / 255.0
+    img_masked = img_masked.transpose(2, 0, 1).astype(np.float32) / 255.0
+    img_concat = np.concatenate([img_real_ex, img_masked], axis=0)[np.newaxis, ...]
+
+    if input_size != 160:
+        resized = np.zeros((1, 6, input_size, input_size), dtype=np.float32)
+        for c in range(6):
+            resized[0, c] = cv2.resize(
+                img_concat[0, c], (input_size, input_size), interpolation=cv2.INTER_AREA
+            )
+        img_concat = resized
+
+    audio_feat = get_audio_features(feats, i)[np.newaxis, ...]
+
+    inputs = {input_names[0]: img_concat, input_names[1]: audio_feat}
+    pred = session.run(None, inputs)[0]
+
+    pred = pred[0].transpose(1, 2, 0) * 255
+    pred = np.clip(pred, 0, 255).astype(np.uint8)
+    if pred.shape[0] != 160:
+        pred = cv2.resize(pred, (160, 160), interpolation=cv2.INTER_LINEAR)
+
+    crop_img_ori[4:164, 4:164] = pred
+    crop_img_ori = cv2.resize(crop_img_ori, (w, h))
+    img[ymin:ymax, xmin:xmax] = crop_img_ori
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out_path), img)
+    print(f"已保存: {out_path}")
+
+
+if __name__ == "__main__":
+    main()
