@@ -442,12 +442,13 @@ class FullInferenceActivity : AppCompatActivity() {
                 val idx = y * inputSize + x
                 val cReal = realUse.getPixel(x, y)
                 val cMask = maskedUse.getPixel(x, y)
-                out[0 * hw + idx] = Color.blue(cReal) / 255f
+                // 模型期望 BGR；部分设备 Bitmap 存为 RGB，需交换 B/R
+                out[0 * hw + idx] = Color.red(cReal) / 255f
                 out[1 * hw + idx] = Color.green(cReal) / 255f
-                out[2 * hw + idx] = Color.red(cReal) / 255f
-                out[3 * hw + idx] = Color.blue(cMask) / 255f
+                out[2 * hw + idx] = Color.blue(cReal) / 255f
+                out[3 * hw + idx] = Color.red(cMask) / 255f
                 out[4 * hw + idx] = Color.green(cMask) / 255f
-                out[5 * hw + idx] = Color.red(cMask) / 255f
+                out[5 * hw + idx] = Color.blue(cMask) / 255f
             }
         }
         if (realUse != real) realUse.recycle()

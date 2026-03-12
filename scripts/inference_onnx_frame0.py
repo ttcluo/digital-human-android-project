@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--dump_output", action="store_true", help="导出模型输出到 .npy，与 Android output 对比")
     parser.add_argument("--decoder", choices=["cv2", "pil"], default="cv2", help="JPEG 解码器，pil 更接近 Android BitmapFactory")
     parser.add_argument("--use_crop", help="直接使用 Android 导出的 android_crop168.png，跳过 decode+crop+resize")
+    parser.add_argument("--output_rgb", action="store_true", help="保存时转 RGB，供标准查看器正确显示（模型输出为 BGR）")
     args = parser.parse_args()
     out_path = Path(args.out)
 
@@ -198,15 +199,17 @@ def main():
     if args.raw:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         raw_path = out_path.parent / (out_path.stem + "_raw.png")
-        cv2.imwrite(str(raw_path), pred_raw)
+        to_save = cv2.cvtColor(pred_raw, cv2.COLOR_BGR2RGB) if args.output_rgb else pred_raw
+        cv2.imwrite(str(raw_path), to_save)
         print(f"已保存 raw 输出: {raw_path}")
 
-    crop_img_ori[4:164, 4:164] = pred
+    crop_img_ori[4:164, 4:164] = pred_raw
     crop_img_ori = cv2.resize(crop_img_ori, (crop_w_orig, crop_h_orig))
     img[ymin:ymax, xmin:xmax] = crop_img_ori
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out_path), img)
+    out_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if args.output_rgb else img
+    cv2.imwrite(str(out_path), out_img)
     print(f"已保存: {out_path}")
 
 
