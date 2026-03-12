@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Rect
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -28,6 +30,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class UnetBenchmarkActivity : AppCompatActivity() {
 
@@ -217,6 +221,25 @@ class UnetBenchmarkActivity : AppCompatActivity() {
             }
         }
 
+        val latch = CountDownLatch(1)
+        holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                latch.countDown()
+            }
+            override fun surfaceChanged(
+                holder: SurfaceHolder,
+                format: Int,
+                width: Int,
+                height: Int
+            ) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                realtimeRunning = false
+            }
+        })
+        if (holder.surface.isValid) {
+            latch.countDown()
+        }
+
         realtimeRunning = true
         realtimeThread = Thread {
             val outH = 128
@@ -241,11 +264,8 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 val imgSize = imgShape.reduce { acc, v -> acc * v }.toInt()
                 val audioSize = audioShape.reduce { acc, v -> acc * v }.toInt()
                 val imgInput = FloatArray(imgSize) { 0.0f }
-                // 单帧音频特征缓冲区，形状 [1,128,16,32]
                 val audioInput = FloatArray(audioSize) { 0.0f }
 
-                // 尝试从 assets 加载一张 128x128 参考人脸图片，填入 6 通道图像输入（前 3 通道 + 后 3 通道复用同一张图）。
-                // 需要你在 app/src/main/assets 下自行放置一张 ref_face_128.png。
                 try {
                     loadRefImageToTensor(this, "ref_face_128.png", imgInput, outW, outH)
                 } catch (e: Exception) {
@@ -261,6 +281,12 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 bitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
                 pixels = IntArray(outW * outH)
                 Log.i(LOG_TAG, "Realtime demo init: outH=$outH, outW=$outW, imgSize=$imgSize, audioSize=$audioSize")
+
+                if (!latch.await(5, TimeUnit.SECONDS)) {
+                    Log.e(LOG_TAG, "Surface not ready within 5s, draw may be black")
+                } else {
+                    Log.i(LOG_TAG, "Surface ready, starting draw loop")
+                }
 
                 var audioFrameIndex = 0
                 var frameCounter = 0
@@ -323,77 +349,62 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                         val c1 = output[0][1]
                         val c2 = output[0][2]
 
-                        // 为了在端上更直观地看到网络输出，这里使用伪彩色 debug 渲染：
-                        // - 不与底图混合，只根据 U-Net 第 0 通道的值着色
-                        // - v < 0.33 -> 蓝色, 0.33–0.66 -> 绿色, >0.66 -> 红色
+                        // 真实肤色：U-Net 三通道作为 RGB，[0,1] 映射到 0–255
                         var idx = 0
                         var y = 0
                         while (y < outH) {
                             var x = 0
                             while (x < outW) {
-                                val v = c0[y][x].coerceIn(0.0f, 1.0f)
-                                val (outR, outG, outB) = when {
-                                    v < 0.33f -> Triple(0, 0, 255)        // 蓝
-                                    v < 0.66f -> Triple(0, 255, 0)        // 绿
-                                    else -> Triple(255, 0, 0)             // 红
-                                }
-
-                                px[idx++] =
-                                    (0xFF shl 24) or
-                                        (outR.coerceIn(0, 255) shl 16) or
-                                        (outG.coerceIn(0, 255) shl 8) or
-                                        outB.coerceIn(0, 255)
+                                val r = (c0[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
+                                val g = (c1[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
+                                val b = (c2[y][x].coerceIn(0.0f, 1.0f) * 255f).toInt().coerceIn(0, 255)
+                                px[idx++] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                                 x++
                             }
                             y++
                         }
                         bmp.setPixels(px, 0, outW, 0, 0, outW, outH)
 
+                        // 复刻 inference.py：以参考人脸为底图，将预测 patch 贴回中心区域 [margin, margin, outW-margin, outH-margin]
+                        val margin = 4
+                        val toDraw: Bitmap = when (val base = refFaceBitmap) {
+                            null -> bmp
+                            else -> if (base.isRecycled) bmp else {
+                                val composed = base.copy(Bitmap.Config.ARGB_8888, true)
+                                val compCanvas = Canvas(composed)
+                                val srcRect = Rect(margin, margin, outW - margin, outH - margin)
+                                compCanvas.drawBitmap(bmp, srcRect, srcRect, Paint().apply { isAntiAlias = false })
+                                composed
+                            }
+                        }
+
                         val canvas = holder.lockCanvas()
                         if (canvas != null) {
                             try {
+                                if (frameCounter % 30 == 0) {
+                                    Log.d(LOG_TAG, "canvas size: ${canvas.width} x ${canvas.height}")
+                                }
                                 canvas.drawColor(Color.BLACK)
                                 val dest = Rect(0, 0, canvas.width, canvas.height)
-                                canvas.drawBitmap(bmp, null, dest, null)
+                                canvas.drawBitmap(toDraw, null, dest, null)
                             } finally {
                                 holder.unlockCanvasAndPost(canvas)
                             }
                         }
 
-                        // 仅保存第一帧 debug 图到本地文件，方便你直接查看像素结果。
                         if (!debugFrameSaved) {
                             try {
                                 val outFile = File(filesDir, "unet_debug_frame.png")
                                 FileOutputStream(outFile).use { fos ->
-                                    bmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                                    toDraw.compress(Bitmap.CompressFormat.PNG, 100, fos)
                                 }
-                                Log.i(
-                                    LOG_TAG,
-                                    "Saved debug U-Net frame to: ${outFile.absolutePath}"
-                                )
-                                // 打印若干像素值作为额外参考
-                                val sample = buildString {
-                                    append("sample pixels: ")
-                                    val sx = listOf(32, 64, 96)
-                                    val sy = listOf(32, 64, 96)
-                                    for (yy in sy) {
-                                        for (xx in sx) {
-                                            val c = bmp.getPixel(xx, yy)
-                                            append(
-                                                "($xx,$yy)=" +
-                                                    "${Color.red(c)}," +
-                                                    "${Color.green(c)}," +
-                                                    "${Color.blue(c)}; "
-                                            )
-                                        }
-                                    }
-                                }
-                                Log.i(LOG_TAG, sample)
+                                Log.i(LOG_TAG, "Saved debug frame to: ${outFile.absolutePath}")
                             } catch (e: Exception) {
                                 Log.e(LOG_TAG, "save debug frame failed", e)
                             }
                             debugFrameSaved = true
                         }
+                        if (toDraw !== bmp) toDraw.recycle()
                     }
 
                     Log.d(LOG_TAG, "Realtime inference step done")
@@ -410,21 +421,6 @@ class UnetBenchmarkActivity : AppCompatActivity() {
                 stopAudioCapture()
             }
         }.also { it.start() }
-
-        // 确保在 Surface 可用时再开始绘制（当前实现仅日志，可根据需要扩展为真正渲染）
-        holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {}
-            override fun surfaceChanged(
-                holder: SurfaceHolder,
-                format: Int,
-                width: Int,
-                height: Int
-            ) {}
-
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                realtimeRunning = false
-            }
-        })
     }
 
     /**
