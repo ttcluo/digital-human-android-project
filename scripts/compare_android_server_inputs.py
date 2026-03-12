@@ -8,9 +8,12 @@
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_debug_img_input.bin data/
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_debug_audio_input.bin data/
      adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_debug_output.bin data/
+     adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_patch_real.png data/
+     adb pull /sdcard/Android/data/com.digitalhuman.app/files/Movies/android_patch_masked.png data/
 
   3. 对比:
      python scripts/compare_android_server_inputs.py --data_dir data
+     python scripts/compare_android_server_inputs.py --data_dir data --verbose  # 详细诊断
 """
 
 import argparse
@@ -18,6 +21,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+# mask 区域与 OpenCV rectangle(5,5,150,145) 一致
+MASK_X1, MASK_Y1, MASK_X2, MASK_Y2 = 5, 5, 150, 145
+
+
+def in_mask(y: int, x: int) -> bool:
+    return MASK_X1 <= x <= MASK_X2 and MASK_Y1 <= y <= MASK_Y2
 
 
 def load_bin(path: Path, shape: tuple) -> np.ndarray:
@@ -31,6 +41,7 @@ def load_bin(path: Path, shape: tuple) -> np.ndarray:
 def main():
     parser = argparse.ArgumentParser(description="对比 Android 与服务器输入/输出")
     parser.add_argument("--data_dir", default="data", help="存放 debug 文件的目录")
+    parser.add_argument("--verbose", "-v", action="store_true", help="详细诊断：列出差异像素、保存可视化")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -69,8 +80,13 @@ def main():
         a_img = load_bin(android_img, s_img.shape)
         print("=== img 输入对比 ===")
         compare("img", s_img, a_img)
+
+        if args.verbose:
+            _diagnose_img_diff(s_img, a_img, data_dir)
     else:
         print("提示: 无 debug_img_input.npy，运行 inference_onnx_frame0.py --dump_inputs")
+
+    _compare_patch_pngs(data_dir)
 
     # 对比 audio
     if server_audio.exists():
@@ -93,6 +109,98 @@ def main():
             compare("output", s_out, a_out)
         else:
             print(f"\noutput: Android 已 dump (shape [3,{out_size},{out_size}])，服务器加 --dump_output 后可对比")
+
+
+def _compare_patch_pngs(data_dir: Path) -> None:
+    """比对 raw patch PNG，定位是 crop/resize 还是 mask 导致差异。"""
+    s_real = data_dir / "debug_patch_real.png"
+    s_masked = data_dir / "debug_patch_masked.png"
+    a_real = data_dir / "android_patch_real.png"
+    a_masked = data_dir / "android_patch_masked.png"
+    if not s_real.exists() or not a_real.exists():
+        return
+    try:
+        import cv2
+        sr = cv2.imread(str(s_real))
+        ar = cv2.imread(str(a_real))
+        if sr is None or ar is None:
+            return
+        if sr.shape != ar.shape:
+            print(f"\n=== patch real PNG 尺寸不一致: {sr.shape} vs {ar.shape}")
+            return
+        diff_r = np.abs(sr.astype(np.float64) - ar.astype(np.float64))
+        print(f"\n=== patch real PNG 对比 (crop+resize 后原图) ===")
+        print(f"  max_diff={diff_r.max():.0f}, mean_diff={diff_r.mean():.2f}")
+        if diff_r.max() > 10:
+            yy, xx = np.unravel_index(np.argmax(diff_r.sum(axis=2)), diff_r.shape[:2])
+            print(f"  最大差异位置 (y={yy},x={xx}): server={sr[yy,xx]}, android={ar[yy,xx]}")
+
+        if s_masked.exists() and a_masked.exists():
+            sm = cv2.imread(str(s_masked))
+            am = cv2.imread(str(a_masked))
+            if sm is not None and am is not None and sm.shape == am.shape:
+                diff_m = np.abs(sm.astype(np.float64) - am.astype(np.float64))
+                print(f"\n=== patch masked PNG 对比 ===")
+                print(f"  max_diff={diff_m.max():.0f}, mean_diff={diff_m.mean():.2f}")
+    except ImportError:
+        pass
+
+
+def _diagnose_img_diff(s_img: np.ndarray, a_img: np.ndarray, data_dir: Path) -> None:
+    """详细诊断 img 差异：差异像素分布、real/masked 分离、可视化。"""
+    # shape (1,6,160,160): ch0-2=real BGR, ch3-5=masked BGR
+    s = s_img[0]
+    a = a_img[0]
+    diff = np.abs(s.astype(np.float64) - a.astype(np.float64))
+
+    # 按通道统计
+    for ch, name in [(0, "real_B"), (1, "real_G"), (2, "real_R"), (3, "mask_B"), (4, "mask_G"), (5, "mask_R")]:
+        d = diff[ch]
+        n_bad = np.sum(d > 0.01)
+        if n_bad > 0:
+            in_mask_cnt = sum(1 for y in range(160) for x in range(160) if d[y, x] > 0.01 and in_mask(y, x))
+            out_mask_cnt = n_bad - in_mask_cnt
+            print(f"  {name}: {n_bad} 像素 diff>0.01 (mask内 {in_mask_cnt}, mask外 {out_mask_cnt})")
+
+    # 列出 diff>0.5 的像素（显著差异）
+    thresh = 0.5
+    bad = np.where(diff > thresh)
+    if len(bad[0]) > 0:
+        print(f"\n  差异>{thresh} 的像素 (最多 20 个):")
+        order = np.argsort(-diff.ravel())[:20]
+        for idx in order:
+            flat = diff.ravel()[idx]
+            if flat < thresh:
+                break
+            c, y, x = np.unravel_index(idx, diff.shape)
+            ch_name = ["real_B", "real_G", "real_R", "mask_B", "mask_G", "mask_R"][c]
+            loc = "mask内" if in_mask(y, x) else "mask外"
+            print(f"    ({c},{y},{x}) {ch_name} {loc}: s={s[c,y,x]:.4f} a={a[c,y,x]:.4f}")
+
+    # 保存 real/masked 为 PNG 便于肉眼对比
+    try:
+        import cv2
+        # real: ch0-2 BGR, 反归一化
+        s_real = (np.clip(s[:3].transpose(1, 2, 0) * 255, 0, 255)).astype(np.uint8)
+        a_real = (np.clip(a[:3].transpose(1, 2, 0) * 255, 0, 255)).astype(np.uint8)
+        s_masked = (np.clip(s[3:].transpose(1, 2, 0) * 255, 0, 255)).astype(np.uint8)
+        a_masked = (np.clip(a[3:].transpose(1, 2, 0) * 255, 0, 255)).astype(np.uint8)
+        cv2.imwrite(str(data_dir / "compare_server_real.png"), s_real)
+        cv2.imwrite(str(data_dir / "compare_android_real.png"), a_real)
+        cv2.imwrite(str(data_dir / "compare_server_masked.png"), s_masked)
+        cv2.imwrite(str(data_dir / "compare_android_masked.png"), a_masked)
+        # 差异热力图：mask 外差异
+        diff_out = np.zeros((160, 160), dtype=np.float32)
+        for y in range(160):
+            for x in range(160):
+                if not in_mask(y, x):
+                    diff_out[y, x] = diff[:, y, x].max()
+        if diff_out.max() > 0:
+            heat = (np.clip(diff_out * 255, 0, 255)).astype(np.uint8)
+            cv2.imwrite(str(data_dir / "compare_diff_mask_out.png"), heat)
+        print(f"\n  已保存: compare_*_real.png, compare_*_masked.png, compare_diff_mask_out.png")
+    except ImportError:
+        print("  提示: 安装 cv2 可保存可视化 PNG")
 
 
 if __name__ == "__main__":

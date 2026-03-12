@@ -51,8 +51,9 @@ class FullInferenceActivity : AppCompatActivity() {
         private const val CROP_168 = 168
         private const val PATCH_160 = 160
         private const val MASK_MARGIN = 5
-        private const val MASK_RIGHT = 150
-        private const val MASK_BOTTOM = 145
+        // drawRect 的 right/bottom 为 exclusive，需 +1 才能与 OpenCV rectangle(5,5,150,145) 一致
+        private const val MASK_RIGHT = 151
+        private const val MASK_BOTTOM = 146
     }
 
     private lateinit var btnSelectAudio: Button
@@ -272,6 +273,9 @@ class FullInferenceActivity : AppCompatActivity() {
                 MASK_RIGHT.toFloat(), MASK_BOTTOM.toFloat(),
                 Paint().apply { color = Color.BLACK }
             )
+            if (i == 0) {
+                savePatchForDebug(getOutputDir(), patch160, masked160)
+            }
 
             val imgInput = FloatArray(6 * inputSize * inputSize)
             fillSixChannelInput(patch160, masked160, imgInput, inputSize)
@@ -425,14 +429,16 @@ class FullInferenceActivity : AppCompatActivity() {
     }
 
     private fun fillSixChannelInput(real: Bitmap, masked: Bitmap, out: FloatArray, inputSize: Int) {
-        val realScaled = Bitmap.createScaledBitmap(real, inputSize, inputSize, true)
-        val maskedScaled = Bitmap.createScaledBitmap(masked, inputSize, inputSize, true)
+        val realUse = if (real.width == inputSize && real.height == inputSize) real
+        else Bitmap.createScaledBitmap(real, inputSize, inputSize, true)
+        val maskedUse = if (masked.width == inputSize && masked.height == inputSize) masked
+        else Bitmap.createScaledBitmap(masked, inputSize, inputSize, true)
         val hw = inputSize * inputSize
         for (y in 0 until inputSize) {
             for (x in 0 until inputSize) {
                 val idx = y * inputSize + x
-                val cReal = realScaled.getPixel(x, y)
-                val cMask = maskedScaled.getPixel(x, y)
+                val cReal = realUse.getPixel(x, y)
+                val cMask = maskedUse.getPixel(x, y)
                 out[0 * hw + idx] = Color.blue(cReal) / 255f
                 out[1 * hw + idx] = Color.green(cReal) / 255f
                 out[2 * hw + idx] = Color.red(cReal) / 255f
@@ -441,8 +447,8 @@ class FullInferenceActivity : AppCompatActivity() {
                 out[5 * hw + idx] = Color.red(cMask) / 255f
             }
         }
-        realScaled.recycle()
-        maskedScaled.recycle()
+        if (realUse != real) realUse.recycle()
+        if (maskedUse != masked) maskedUse.recycle()
     }
 
     /**
@@ -514,6 +520,20 @@ class FullInferenceActivity : AppCompatActivity() {
             }
         }
         crop168.setPixels(cropPx, 0, CROP_168, 0, 0, CROP_168, CROP_168)
+    }
+
+    private fun savePatchForDebug(outDir: File, patch160: Bitmap, masked160: Bitmap) {
+        try {
+            FileOutputStream(File(outDir, "android_patch_real.png")).use { fos ->
+                patch160.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+            FileOutputStream(File(outDir, "android_patch_masked.png")).use { fos ->
+                masked160.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+            Log.i(LOG_TAG, "Patch saved: android_patch_*.png")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "savePatchForDebug failed", e)
+        }
     }
 
     private fun dumpDebugInputsOutput(

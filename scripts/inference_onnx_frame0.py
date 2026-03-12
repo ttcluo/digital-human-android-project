@@ -130,10 +130,10 @@ def main():
 
     img_real_ex = crop_img[4:164, 4:164].copy()
     img_real_ex_ori = img_real_ex.copy()
-    img_masked = cv2.rectangle(img_real_ex_ori.copy(), (5, 5, 150, 145), (0, 0, 0), -1)
+    img_masked_np = cv2.rectangle(img_real_ex_ori.copy(), (5, 5, 150, 145), (0, 0, 0), -1)
 
     img_real_ex = img_real_ex.transpose(2, 0, 1).astype(np.float32) / 255.0
-    img_masked = img_masked.transpose(2, 0, 1).astype(np.float32) / 255.0
+    img_masked = img_masked_np.transpose(2, 0, 1).astype(np.float32) / 255.0
     img_concat = np.concatenate([img_real_ex, img_masked], axis=0)[np.newaxis, ...]
 
     if input_size != 160:
@@ -151,7 +151,10 @@ def main():
         out_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(out_path.parent / "debug_img_input.npy", img_concat)
         np.save(out_path.parent / "debug_audio_input.npy", audio_feat)
-        print(f"已导出输入: debug_img_input.npy, debug_audio_input.npy")
+        # 保存 raw 160x160 便于与 Android 原图对比（mask 前/后）
+        cv2.imwrite(str(out_path.parent / "debug_patch_real.png"), img_real_ex_ori)
+        cv2.imwrite(str(out_path.parent / "debug_patch_masked.png"), img_masked_np)
+        print(f"已导出输入: debug_img_input.npy, debug_audio_input.npy, debug_patch_*.png")
 
     inputs = {input_names[0]: img_concat, input_names[1]: audio_feat}
     pred = session.run(None, inputs)[0]
